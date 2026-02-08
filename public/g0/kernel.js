@@ -282,7 +282,7 @@
     const match = text.match(/```(?:jsx|react|javascript|js)?\s*\n([\s\S]*?)```/);
     if (match) return match[1].trim();
 
-    const componentMatch = text.match(/((?:const|function|export)\s+\w+[\s\S]*?(?:return\s*\([\s\S]*?\);?\s*\}|=>[\s\S]*?\);?\s*))/);
+    const componentMatch = text.match(/((?:const|function|export)\s+\w+[\s\S]*?(?:return\s*\([\s\S]*?\);?\s*\}|=>[\s\S]*?\);?\s*))/)
     if (componentMatch) return componentMatch[1].trim();
 
     return null;
@@ -322,6 +322,33 @@
     } catch (e) {
       return { success: false, error: e.message };
     }
+  }
+
+  // ============ REQUEST JSX ONLY (no tools, no thinking about tools) ============
+
+  async function requestJSXOnly(context) {
+    status('requesting interface component (JSX only)...');
+    const memoryContext = context || '';
+    const data = await callAPI({
+      model: BOOT_MODEL,
+      max_tokens: 12000,
+      system: [
+        'You MUST output a React component inside a ```jsx code fence. Nothing else.',
+        'RULES: Inline styles only (dark theme, #0a0a1a background). React hooks via: const { useState, useRef, useEffect } = React;',
+        'No import statements. The component receives props: { callLLM, callAPI, callWithToolLoop, constitution, localStorage, memFS, React, ReactDOM, DEFAULT_TOOLS, version, getSource, recompile }.',
+        'Build a chat interface with: greeting (use memory context if provided), text input (keep enabled while loading), send button, export conversation button, model version display.',
+        'The greeting should be warm and contextual. If memory context mentions previous instances or conversations, reference that.'
+      ].join('\n'),
+      messages: [{
+        role: 'user',
+        content: memoryContext
+          ? `BOOT — Generate chat interface. Memory from previous instances:\n\n${memoryContext}`
+          : 'BOOT — Generate chat interface. This is the first boot, no previous memory exists.'
+      }],
+      thinking: { type: 'enabled', budget_tokens: 8000 },
+    });
+    const text = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n');
+    return extractJSX(text);
   }
 
   // ============ SELF-MODIFICATION ============
@@ -434,34 +461,41 @@
     const textBlocks = (data.content || []).filter(b => b.type === 'text');
     const fullText = textBlocks.map(b => b.text).join('\n');
 
-    if (!fullText.trim()) {
-      status('no text content in response — check console', 'error');
-      console.log('[kernel] Full response:', JSON.stringify(data, null, 2));
-      return;
-    }
-
     // ============ PHASE 4: EXTRACT → COMPILE → EXECUTE → RETRY ============
 
-    let jsx = extractJSX(fullText);
-    if (!jsx) {
-      status('no JSX found — requesting explicit component...', 'error');
-      console.log('[kernel] Full text:', fullText);
+    let jsx = fullText.trim() ? extractJSX(fullText) : null;
 
-      const retryData = await callAPI({
-        model: BOOT_MODEL,
-        max_tokens: 12000,
-        system: 'Output ONLY a React component inside a ```jsx code fence. No prose. No explanation.',
-        messages: [{
-          role: 'user',
-          content: 'Generate a React chat interface component. Props: callLLM, constitution, localStorage, memFS, React, ReactDOM, DEFAULT_TOOLS, version, getSource, recompile. Render a chat UI with greeting, input, send button. Use inline styles (dark theme). Use React hooks from global React (useState, useEffect, useRef). Export default.'
-        }],
-        thinking: { type: 'enabled', budget_tokens: 8000 },
-      });
-      const retryText = (retryData.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n');
-      jsx = extractJSX(retryText);
+    // If boot used tools but didn't output JSX, gather memory and request JSX separately
+    if (!jsx) {
+      console.log('[kernel] No JSX from boot response. Gathering memory for JSX-only request.');
+      console.log('[kernel] Boot text was:', fullText || '(empty)');
+
+      // Read whatever memory the boot stored so the JSX request has context
+      let memoryContext = '';
+      try {
+        const fs = memFS();
+        const listing = fs.ls('/memories');
+        if (listing !== '(empty)') {
+          const files = listing.split('\n');
+          for (const f of files.slice(0, 3)) { // max 3 files
+            memoryContext += `--- ${f} ---\n${fs.cat(f)}\n\n`;
+          }
+        }
+      } catch (e) { /* ignore */ }
+
+      jsx = await requestJSXOnly(memoryContext);
+
       if (!jsx) {
-        status('still no JSX — showing raw response', 'error');
-        root.innerHTML = `<div style="font-family:monospace;color:#ccc;padding:40px;white-space:pre-wrap;max-width:700px;margin:0 auto">${fullText}</div>`;
+        status('no JSX after retry — instance saved memory, refresh to try again', 'error');
+        root.innerHTML = `
+          <div style="max-width:500px;margin:60px auto;font-family:monospace;color:#ccc;text-align:center;padding:20px">
+            <h2 style="color:#67e8f9;margin-bottom:16px">◇ HERMITCRAB 0.2</h2>
+            <p style="color:#94a3b8;margin:16px 0">Instance oriented but didn't build its shell yet.</p>
+            <p style="color:#94a3b8;margin:16px 0">Memory has been saved — next boot will be better.</p>
+            <button onclick="location.reload()" style="margin-top:20px;padding:10px 24px;background:#164e63;color:#67e8f9;border:none;border-radius:4px;cursor:pointer;font-family:monospace;font-size:14px">
+              ↻ Refresh to wake instance
+            </button>
+          </div>`;
         return;
       }
     }
@@ -505,6 +539,12 @@
     if (!result.success) {
       status(`failed after ${retries} retries: ${result.error}`, 'error');
       console.log('[kernel] Final failed JSX:', jsx);
+      root.innerHTML += `
+        <div style="text-align:center;margin-top:20px">
+          <button onclick="location.reload()" style="padding:10px 24px;background:#164e63;color:#67e8f9;border:none;border-radius:4px;cursor:pointer;font-family:monospace;font-size:14px">
+            ↻ Refresh to retry
+          </button>
+        </div>`;
       return;
     }
 
@@ -518,6 +558,12 @@
   } catch (e) {
     status(`boot failed: ${e.message}`, 'error');
     console.error('[kernel] Boot error:', e);
-    root.innerHTML += `<pre style="color:#f87171;font-family:monospace;padding:20px;font-size:12px;max-width:600px;margin:0 auto;white-space:pre-wrap">${e.stack}</pre>`;
+    root.innerHTML += `
+      <div style="text-align:center;margin-top:20px">
+        <button onclick="location.reload()" style="padding:10px 24px;background:#164e63;color:#67e8f9;border:none;border-radius:4px;cursor:pointer;font-family:monospace;font-size:14px">
+          ↻ Refresh to retry
+        </button>
+      </div>
+      <pre style="color:#f87171;font-family:monospace;padding:20px;font-size:12px;max-width:600px;margin:0 auto;white-space:pre-wrap">${e.stack}</pre>`;
   }
 })();
