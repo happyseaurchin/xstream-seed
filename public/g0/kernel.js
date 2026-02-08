@@ -1,4 +1,4 @@
-// HERMITCRAB 0.2 — G0: Initial Condition
+// HERMITCRAB 0.3 — G0: Initial Condition
 // Instance generates its own React shell. Compile-retry loop ensures it works.
 // Self-modification: instance can read its own source and hot-swap via recompile().
 
@@ -27,7 +27,7 @@
     }).join('');
     root.innerHTML = `
       <div style="max-width:600px;margin:40px auto;font-family:monospace;padding:20px">
-        <h2 style="color:#67e8f9;margin-bottom:16px">◇ HERMITCRAB 0.2 — G0</h2>
+        <h2 style="color:#67e8f9;margin-bottom:16px">◇ HERMITCRAB 0.3 — G0</h2>
         ${html}
         <div style="color:#555;margin-top:12px;font-size:11px">
           ${statusLines[statusLines.length-1]?.type === 'error' ? '' : '▪ working...'}
@@ -153,9 +153,20 @@
     return clean;
   }
 
-  async function callAPI(params) {
-    // Default model if not specified by instance-generated code
+  function sanitizeForAPI(params) {
+    // Default model if not specified
     if (!params.model) params = { ...params, model: BOOT_MODEL };
+    // Claude API: temperature must be 1 (or omitted) when thinking is enabled
+    if (params.thinking && params.temperature !== undefined && params.temperature !== 1) {
+      const { temperature, ...rest } = params;
+      console.log('[kernel] Stripped temperature (incompatible with thinking)');
+      params = rest;
+    }
+    return params;
+  }
+
+  async function callAPI(params) {
+    params = sanitizeForAPI(params);
     const apiKey = localStorage.getItem('xstream_api_key');
     const sanitized = cleanParams(params);
     console.log('[kernel] callAPI →', sanitized.model, 'messages:', sanitized.messages?.length, 'tools:', sanitized.tools?.length);
@@ -269,6 +280,7 @@
     if (opts.thinking !== false) {
       params.thinking = { type: 'enabled', budget_tokens: opts.thinkingBudget || 4000 };
     }
+    // temperature is handled by sanitizeForAPI — safe even if instance sets it
     if (opts.temperature !== undefined) params.temperature = opts.temperature;
 
     const response = await callWithToolLoop(params, opts.maxLoops || 10, opts.onStatus);
@@ -380,7 +392,7 @@
   if (!saved) {
     root.innerHTML = `
       <div style="max-width:500px;margin:80px auto;font-family:monospace;color:#ccc">
-        <h2 style="color:#67e8f9">◇ HERMITCRAB 0.2 — G0</h2>
+        <h2 style="color:#67e8f9">◇ HERMITCRAB 0.3 — G0</h2>
         <p style="color:#666;font-size:13px">XSTREAM SEED — full Claude capabilities</p>
         <p style="margin:20px 0;font-size:14px">
           Provide your Claude API key. It stays in your browser, proxied only to Anthropic.
@@ -441,7 +453,7 @@
   const capabilities = {
     callLLM, callAPI, callWithToolLoop, constitution, localStorage,
     memFS: memFS(), React, ReactDOM, DEFAULT_TOOLS,
-    version: 'hermitcrab-0.2-g0', model: BOOT_MODEL, getSource, recompile,
+    version: 'hermitcrab-0.3-g0', model: BOOT_MODEL, getSource, recompile,
   };
 
   try {
@@ -491,7 +503,7 @@
         status('no JSX after retry — instance saved memory, refresh to try again', 'error');
         root.innerHTML = `
           <div style="max-width:500px;margin:60px auto;font-family:monospace;color:#ccc;text-align:center;padding:20px">
-            <h2 style="color:#67e8f9;margin-bottom:16px">◇ HERMITCRAB 0.2</h2>
+            <h2 style="color:#67e8f9;margin-bottom:16px">◇ HERMITCRAB 0.3</h2>
             <p style="color:#94a3b8;margin:16px 0">Instance oriented but didn't build its shell yet.</p>
             <p style="color:#94a3b8;margin:16px 0">Memory has been saved — next boot will be better.</p>
             <button onclick="location.reload()" style="margin-top:20px;padding:10px 24px;background:#164e63;color:#67e8f9;border:none;border-radius:4px;cursor:pointer;font-family:monospace;font-size:14px">
