@@ -1,23 +1,36 @@
-# XSTREAM Seed
+# XSTREAM SEED
 
-Minimal LLM kernel. Bring your own API key.
+**Live at: https://seed.machus.ai**
 
-## What is this?
+A self-bootstrapping LLM kernel. Bring your own Claude API key. The LLM wakes with the XSTREAM kernel constitution and engages you using pscale principles.
 
-A self-bootstrapping kernel that operates with YOUR resources:
-- You provide your Claude API key
-- It stays on your machine (localStorage)
-- The proxy exists only to bypass browser CORS restrictions
+## What's Deployed
 
-## Structure
+The active kernel constitution is at `public/kernels/active.md`. This is the system prompt the LLM receives. The version is displayed in the UI header.
 
-```
-api/claude.ts    - Pass-through proxy (no server-side key)
-public/          - Landing page and kernel UI
-```
+| Version | Status | Description |
+|---------|--------|-------------|
+| v0.3 | Archived | Original stub — no pscale, essentially empty |
+| v0.6 | **ACTIVE** | Full constitution — pscale, memory patterns, STI coordinates |
 
-## Deploy
+## How to Update the Kernel
 
-Connect this repo to Vercel, add seed.machus.ai as custom domain.
+1. Edit `public/kernels/active.md`
+2. Update the version in the file header
+3. Copy to `public/kernels/v[new-version].md`
+4. Commit → Vercel auto-deploys
 
-That's it.
+## Architecture
+
+- `public/kernel.js` — Vanilla JS chat interface, fetches constitution at runtime
+- `api/claude.ts` — CORS proxy (user's own API key, no server key)
+- `public/kernels/active.md` — The system prompt
+- Deployed on Vercel, auto-deploys from main branch
+
+## Part of XSTREAM
+
+- seed.machus.ai — This (SEED: user provides everything)
+- xstream.machus.ai — About pscale and xstream
+- xstream.onen.ai — Fantasy narrative coordination
+
+See `CLAUDE.md` for LLM-oriented documentation.

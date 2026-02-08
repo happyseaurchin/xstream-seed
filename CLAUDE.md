@@ -1,36 +1,62 @@
-# CLAUDE.md
+# CLAUDE.md — LLM Orientation for xstream-seed
 
-> ## THIS PROJECT
-> **Repo**: `happyseaurchin/xstream-seed`
-> **Domain**: seed.machus.ai
-> **Vercel Project**: `xstream-seed` (`prj_y9QlZFhnsRgStpBxI5n8krMbnxNM`)
-> **Purpose**: Minimal self-bootstrapping kernel (bring your own API key)
+## What This Is
 
----
+This repository deploys **seed.machus.ai** — a minimal XSTREAM kernel where users provide their own Claude API key and interact with an LLM instance running the XSTREAM kernel constitution.
 
-## WORKING WITH DAVID
+## Critical Files
 
-David is a **vibe-coder** — an architect and designer, not a professional developer. This means:
-- Explain what you're doing and why, in plain language
-- Don't assume deep technical knowledge
-- Be patient and supportive
-- When things break, diagnose calmly rather than dumping error logs
+| File | Purpose |
+|------|----------|
+| `public/kernels/active.md` | **THE system prompt.** This is what the LLM instance receives when it wakes. Change this to change the seed's behaviour. |
+| `public/kernels/v*.md` | Archived versions. Never delete these. |
+| `public/kernel.js` | UI code. Fetches `active.md`, handles chat, localStorage persistence. |
+| `api/claude.ts` | CORS proxy. Passes user's API key to Anthropic. No server-side key. |
 
----
+## To Update the Kernel
 
-## WHAT THIS IS
+1. Edit `public/kernels/active.md`
+2. Update the version number in the file header
+3. Copy the new version to `public/kernels/v[version].md` as archive
+4. Commit and push — Vercel auto-deploys
 
-A minimal, self-contained xstream kernel that users can run with their own API key. No backend required — everything runs client-side.
+## Architecture
 
----
+```
+User's browser → kernel.js (fetches active.md, renders chat UI)
+                          → /api/claude (CORS proxy, user's API key)
+                          → Anthropic API (with active.md as system prompt)
+```
 
-## RELATED PROJECTS
+The kernel.js displays the version from active.md in the header. Conversation is persisted in localStorage. Export saves conversation as JSON.
 
-| Project | Domain | Purpose |
-|---------|--------|---------|
-| `xstream` | xstream.onen.ai | Main 3-zone coordination app |
-| `xstream-the-address-of-meaning` | xstream.machus.ai | Marketing site + experiments |
-| `xq-showcase` | xq.crumful.com | XQ math visualizations |
+## Repo Structure
 
-Shared infrastructure:
-- **Vercel Team**: `team_iTERHQuAAemSTP39REAvULJr`
+```
+xstream-seed/
+├── CLAUDE.md           ← You are here
+├── README.md           ← Human documentation
+├── public/
+│   ├── index.html      ← Landing page
+│   ├── kernel.js       ← Chat UI + constitution loader
+│   └── kernels/
+│       ├── active.md   ← LIVE system prompt
+│       ├── v0.3.md     ← Archive: original stub (no pscale)
+│       └── v0.6.md     ← Archive: first full constitution
+├── api/
+│   └── claude.ts       ← CORS proxy for Anthropic API
+├── package.json
+└── vercel.json
+```
+
+## Key Concepts
+
+- **Pscale**: Semantic coordinate system. Numbers address meaning, not quantity. See active.md for operational details.
+- **SEED environment**: User provides everything. LLM negotiates for resources.
+- **Kernel constitution**: The framing that makes the LLM instance an xstream seed, not a generic chatbot.
+
+## Related Repositories
+
+- `happyseaurchin/xstream` — Main xstream platform (Plex 1 build)
+- `happyseaurchin/xstream-landing` — xstream.machus.ai landing page
+- `happyseaurchin/xstream-the-address-of-meaning` — xstream.machus.ai content (private)
