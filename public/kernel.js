@@ -6,8 +6,11 @@
   const root = document.getElementById('root');
   const saved = localStorage.getItem('xstream_api_key');
   const MEM_PREFIX = 'xmem:';
-  const BOOT_MODEL = 'claude-opus-4-20250514';
-  const CHAT_MODEL = 'claude-sonnet-4-20250514';
+
+  // Model preference chain: try best first, fall back on error
+  const MODEL_CHAIN = ['claude-opus-4-6', 'claude-opus-4-20250514', 'claude-sonnet-4-5-20250929', 'claude-sonnet-4-20250514'];
+  let BOOT_MODEL = MODEL_CHAIN[0];
+  let CHAT_MODEL = 'claude-sonnet-4-5-20250929';
 
   // ============ PROGRESS DISPLAY ============
 
@@ -239,11 +242,9 @@
   // ============ JSX EXTRACTION + COMPILATION + EXECUTION ============
 
   function extractJSX(text) {
-    // Try code fence first
     const match = text.match(/```(?:jsx|react|javascript|js)?\s*\n([\s\S]*?)```/);
     if (match) return match[1].trim();
 
-    // Try bare component pattern
     const componentMatch = text.match(/((?:const|function|export)\s+\w+[\s\S]*?(?:return\s*\([\s\S]*?\);?\s*\}|=>[\s\S]*?\);?\s*))/);
     if (componentMatch) return componentMatch[1].trim();
 
@@ -251,25 +252,22 @@
   }
 
   function prepareJSX(jsx) {
-    // Transform export patterns to module.exports (new Function can't handle ESM)
     let code = jsx;
 
-    // export default function Foo => function Foo ... ; module.exports.default = Foo;
+    // Strip import statements (instance may add them)
+    code = code.replace(/^import\s+.*?;?\s*$/gm, '');
+
+    // Transform export patterns to module.exports
     code = code.replace(/export\s+default\s+function\s+(\w+)/g, 'function $1');
-    // export default class Foo => class Foo
     code = code.replace(/export\s+default\s+class\s+(\w+)/g, 'class $1');
-    // export default Foo => module.exports.default = Foo  (standalone line)
     code = code.replace(/^export\s+default\s+(\w+)\s*;?\s*$/gm, 'module.exports.default = $1;');
-    // Remaining export default <expression> => module.exports.default = <expression>
     code = code.replace(/export\s+default\s+/g, 'module.exports.default = ');
 
-    // Find the component name — look for function or const declarations
+    // Find component name
     const funcMatch = code.match(/(?:^|\n)\s*function\s+(\w+)/);
     const constMatch = code.match(/(?:^|\n)\s*const\s+(\w+)\s*=\s*(?:\(|function|\(\s*\{|\(\s*props)/);
-
     const componentName = funcMatch?.[1] || constMatch?.[1];
 
-    // If we stripped export default from a function/class, add module.exports at the end
     if (componentName && !code.includes('module.exports')) {
       code += `\nmodule.exports.default = ${componentName};`;
     }
@@ -279,16 +277,13 @@
 
   function tryCompileAndExecute(jsx, capabilities) {
     try {
-      // Prepare: strip ESM exports
       const prepared = prepareJSX(jsx);
 
-      // Compile JSX to JS
       const compiled = Babel.transform(prepared, {
         presets: ['react'],
         plugins: []
       }).code;
 
-      // Try executing
       const module = { exports: {} };
       const fn = new Function('React', 'ReactDOM', 'capabilities', 'module', 'exports', compiled);
       fn(React, ReactDOM, capabilities, module, module.exports);
@@ -342,11 +337,31 @@
     return;
   }
 
+  // ============ PHASE 2.5: PROBE BEST MODEL ============
+
+  status('probing best available model...');
+  for (const model of MODEL_CHAIN) {
+    try {
+      const probe = await callAPI({
+        model,
+        max_tokens: 32,
+        messages: [{ role: 'user', content: 'ping' }],
+      });
+      if (probe.content) {
+        BOOT_MODEL = model;
+        status(`using ${model}`, 'success');
+        break;
+      }
+    } catch (e) {
+      status(`${model} — not available, trying next...`);
+      console.log(`[kernel] Model probe failed for ${model}:`, e.message);
+    }
+  }
+
   // ============ PHASE 3: BOOT — instance builds its shell ============
 
   status(`calling ${BOOT_MODEL} with thinking + tools...`);
 
-  // Build capabilities object (needed for compile+execute)
   const capabilities = {
     callLLM,
     callAPI,
