@@ -1,36 +1,35 @@
-# XSTREAM SEED
+# XSTREAM SEED — HERMITCRAB
 
 **Live at: https://seed.machus.ai**
 
-A self-bootstrapping LLM kernel. Bring your own Claude API key. The LLM wakes with the XSTREAM kernel constitution and engages you using pscale principles.
+A self-bootstrapping LLM kernel. The instance builds its own shell.
+
+## How It Works
+
+1. You provide a Claude API key
+2. The kernel loads a constitution (markdown system prompt)
+3. The LLM generates its own React interface
+4. You interact through the interface the instance built
+
+The less we hard-code, the more genuine the seed.
 
 ## What's Deployed
 
-The active kernel constitution is at `public/kernels/active.md`. This is the system prompt the LLM receives. The version is displayed in the UI header.
-
 | Version | Status | Description |
 |---------|--------|-------------|
-| v0.3 | Archived | Original stub — no pscale, essentially empty |
-| v0.6 | **ACTIVE** | Full constitution — pscale, memory patterns, STI coordinates |
-
-## How to Update the Kernel
-
-1. Edit `public/kernels/active.md`
-2. Update the version in the file header
-3. Copy to `public/kernels/v[new-version].md`
-4. Commit → Vercel auto-deploys
-
-## Architecture
-
-- `public/kernel.js` — Vanilla JS chat interface, fetches constitution at runtime
-- `api/claude.ts` — CORS proxy (user's own API key, no server key)
-- `public/kernels/active.md` — The system prompt
-- Deployed on Vercel, auto-deploys from main branch
+| v0.3 | Archived | Original stub — no pscale |
+| v0.6 | Archived | Full constitution, hard-coded UI |
+| hermitcrab-0.1 | **ACTIVE** | Self-generating UI from constitution |
 
 ## Part of XSTREAM
 
-- seed.machus.ai — This (SEED: user provides everything)
-- xstream.machus.ai — About pscale and xstream
-- xstream.onen.ai — Fantasy narrative coordination
+- **seed.machus.ai** — This (SEED: the instance builds everything)
+- **xstream.machus.ai** — About pscale and xstream
+- **xstream.onen.ai** — Fantasy narrative coordination
+- **crumful.com/engage** — Fulcrum theoretical framework
+
+## Contact
+
+**David Pinto** — [LinkedIn](https://www.linkedin.com/in/davidpinto101/) · Architect
 
 See `CLAUDE.md` for LLM-oriented documentation.

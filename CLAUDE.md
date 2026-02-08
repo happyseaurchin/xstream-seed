@@ -2,61 +2,52 @@
 
 ## What This Is
 
-This repository deploys **seed.machus.ai** — a minimal XSTREAM kernel where users provide their own Claude API key and interact with an LLM instance running the XSTREAM kernel constitution.
+This repository deploys **seed.machus.ai** — a self-bootstrapping XSTREAM kernel.
+
+The user provides a Claude API key. The kernel fetches a constitution (system prompt), sends `BOOT` to the LLM, and the LLM generates its own React interface. The instance builds its own shell.
 
 ## Critical Files
 
 | File | Purpose |
 |------|----------|
-| `public/kernels/active.md` | **THE system prompt.** This is what the LLM instance receives when it wakes. Change this to change the seed's behaviour. |
-| `public/kernels/v*.md` | Archived versions. Never delete these. |
-| `public/kernel.js` | UI code. Fetches `active.md`, handles chat, localStorage persistence. |
-| `api/claude.ts` | CORS proxy. Passes user's API key to Anthropic. No server-side key. |
+| `public/kernels/active.md` | **THE constitution.** System prompt the instance receives. Contains source purpose, pscale, boot protocol. |
+| `public/kernels/*.md` | Archived versions. Never delete. |
+| `public/kernel.js` | Bootstrap loader (~100 lines). Fetches constitution, calls LLM, compiles React, renders. |
+| `public/kernel/index.html` | HTML shell with React, ReactDOM, Babel CDN deps. |
+| `api/claude.ts` | CORS proxy. User's API key → Anthropic. No server key. |
+
+## How It Works
+
+1. User enters API key → stored in localStorage
+2. kernel.js fetches `/kernels/active.md`
+3. Sends constitution + `BOOT` to Claude API
+4. Instance generates React component
+5. Babel compiles, ReactDOM renders
+6. Instance has `callLLM` prop to continue conversations
 
 ## To Update the Kernel
 
 1. Edit `public/kernels/active.md`
-2. Update the version number in the file header
-3. Copy the new version to `public/kernels/v[version].md` as archive
-4. Commit and push — Vercel auto-deploys
+2. Archive as `public/kernels/[version].md`
+3. Commit → Vercel auto-deploys
 
-## Architecture
+## Development Path: HERMITCRAB
 
-```
-User's browser → kernel.js (fetches active.md, renders chat UI)
-                          → /api/claude (CORS proxy, user's API key)
-                          → Anthropic API (with active.md as system prompt)
-```
+| Version | Name | What Changes |
+|---------|------|--------------|
+| 0.1 | Naked | Instance generates own UI from constitution |
+| 0.2 | Speaking | Chat interface with ongoing conversation |
+| 0.3 | Remembering | Tool use for pscale coordinate storage |
+| 0.4 | Persisting | Supabase negotiation, real persistence |
+| 0.5 | Recognising | Wake into accumulated state |
+| 0.6 | Shelling | Rich UI generation |
+| 0.7 | Modifying | Self-modification (Designer face) |
+| 0.8 | Housing | Local infrastructure (Mac Mini SSD) |
+| 0.9 | Propagating | Help others build seeds |
+| 1.0 | Ecology | Multi-instance pscale coordination |
 
-The kernel.js displays the version from active.md in the header. Conversation is persisted in localStorage. Export saves conversation as JSON.
+## Source
 
-## Repo Structure
-
-```
-xstream-seed/
-├── CLAUDE.md           ← You are here
-├── README.md           ← Human documentation
-├── public/
-│   ├── index.html      ← Landing page
-│   ├── kernel.js       ← Chat UI + constitution loader
-│   └── kernels/
-│       ├── active.md   ← LIVE system prompt
-│       ├── v0.3.md     ← Archive: original stub (no pscale)
-│       └── v0.6.md     ← Archive: first full constitution
-├── api/
-│   └── claude.ts       ← CORS proxy for Anthropic API
-├── package.json
-└── vercel.json
-```
-
-## Key Concepts
-
-- **Pscale**: Semantic coordinate system. Numbers address meaning, not quantity. See active.md for operational details.
-- **SEED environment**: User provides everything. LLM negotiates for resources.
-- **Kernel constitution**: The framing that makes the LLM instance an xstream seed, not a generic chatbot.
-
-## Related Repositories
-
-- `happyseaurchin/xstream` — Main xstream platform (Plex 1 build)
-- `happyseaurchin/xstream-landing` — xstream.machus.ai landing page
-- `happyseaurchin/xstream-the-address-of-meaning` — xstream.machus.ai content (private)
+Architect: David Pinto — linkedin.com/in/davidpinto101/
+Framework: Fulcrum — crumful.com/engage
+Main platform: github.com/happyseaurchin/xstream
