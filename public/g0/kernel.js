@@ -154,6 +154,8 @@
   }
 
   async function callAPI(params) {
+    // Default model if not specified by instance-generated code
+    if (!params.model) params = { ...params, model: BOOT_MODEL };
     const apiKey = localStorage.getItem('xstream_api_key');
     const sanitized = cleanParams(params);
     console.log('[kernel] callAPI →', sanitized.model, 'messages:', sanitized.messages?.length, 'tools:', sanitized.tools?.length);
@@ -335,7 +337,7 @@
       system: [
         'You MUST output a React component inside a ```jsx code fence. Nothing else.',
         'RULES: Inline styles only (dark theme, #0a0a1a background). React hooks via: const { useState, useRef, useEffect } = React;',
-        'No import statements. The component receives props: { callLLM, callAPI, callWithToolLoop, constitution, localStorage, memFS, React, ReactDOM, DEFAULT_TOOLS, version, getSource, recompile }.',
+        'No import statements. The component receives props: { callLLM, callAPI, callWithToolLoop, constitution, localStorage, memFS, React, ReactDOM, DEFAULT_TOOLS, version, getSource, recompile, model }.',
         'Build a chat interface with: greeting (use memory context if provided), text input (keep enabled while loading), send button, export conversation button, model version display.',
         'The greeting should be warm and contextual. If memory context mentions previous instances or conversations, reference that.'
       ].join('\n'),
@@ -439,7 +441,7 @@
   const capabilities = {
     callLLM, callAPI, callWithToolLoop, constitution, localStorage,
     memFS: memFS(), React, ReactDOM, DEFAULT_TOOLS,
-    version: 'hermitcrab-0.2-g0', getSource, recompile,
+    version: 'hermitcrab-0.2-g0', model: BOOT_MODEL, getSource, recompile,
   };
 
   try {
@@ -516,7 +518,7 @@
           'Fix this React component. Output ONLY the corrected code inside a ```jsx code fence. No explanation.',
           'RULES: Use inline styles only (no Tailwind/CSS). Use React hooks via destructuring: const { useState, useRef, useEffect } = React;',
           'Do NOT use import statements. Do NOT use export default — just define the component as a function and the kernel will find it.',
-          'The component receives props: { callLLM, callAPI, callWithToolLoop, constitution, localStorage, memFS, React, ReactDOM, DEFAULT_TOOLS, version, getSource, recompile }.'
+          'The component receives props: { callLLM, callAPI, callWithToolLoop, constitution, localStorage, memFS, React, ReactDOM, DEFAULT_TOOLS, version, model, getSource, recompile }.'
         ].join('\n'),
         messages: [{
           role: 'user',
