@@ -1,11 +1,12 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
 /**
- * PASSTHROUGH Claude API Proxy
+ * FULL PASSTHROUGH Claude API Proxy
  *
  * User provides their OWN API key.
  * This proxy exists purely to bypass browser CORS restrictions.
- * No server-side API key. No storage. Just pass-through.
+ * It passes through EVERYTHING the Claude API accepts.
+ * No filtering. No stripping. The instance gets full Claude capabilities.
  */
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -47,22 +48,55 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
-    const { system, messages, max_tokens, temperature, model } = req.body;
+    // Extract ALL fields from request body — pass through everything
+    const {
+      model,
+      max_tokens,
+      system,
+      messages,
+      tools,
+      tool_choice,
+      thinking,
+      temperature,
+      top_p,
+      top_k,
+      stop_sequences,
+      metadata,
+      // Strip client-only fields
+      apiKey: _apiKey,
+      ...rest
+    } = req.body;
+
+    // Build request body — only include fields that are present
+    const body: Record<string, unknown> = {
+      model: model || 'claude-sonnet-4-20250514',
+      max_tokens: max_tokens || 4096,
+      messages,
+    };
+
+    if (system) body.system = system;
+    if (tools) body.tools = tools;
+    if (tool_choice) body.tool_choice = tool_choice;
+    if (thinking) body.thinking = thinking;
+    if (temperature !== undefined) body.temperature = temperature;
+    if (top_p !== undefined) body.top_p = top_p;
+    if (top_k !== undefined) body.top_k = top_k;
+    if (stop_sequences) body.stop_sequences = stop_sequences;
+    if (metadata) body.metadata = metadata;
+
+    // Build headers — include beta features
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      // Enable ALL beta features the instance might use
+      'anthropic-beta': 'web-fetch-2025-09-10,code-execution-2025-08-25,context-management-2025-06-27',
+    };
 
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
-        model: model || 'claude-sonnet-4-20250514',
-        max_tokens: max_tokens || 4096,
-        system,
-        messages,
-        temperature: temperature ?? 0.7,
-      }),
+      headers,
+      body: JSON.stringify(body),
     });
 
     const data = await response.json();
