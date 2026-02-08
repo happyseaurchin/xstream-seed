@@ -156,6 +156,11 @@
   function sanitizeForAPI(params) {
     // Default model if not specified
     if (!params.model) params = { ...params, model: BOOT_MODEL };
+    // Validate model string — instance-generated code sometimes passes version string
+    if (params.model && !params.model.startsWith('claude-')) {
+      console.log('[kernel] Invalid model "' + params.model + '", using ' + BOOT_MODEL);
+      params = { ...params, model: BOOT_MODEL };
+    }
     // Claude API: temperature must be 1 (or omitted) when thinking is enabled
     if (params.thinking && params.temperature !== undefined && params.temperature !== 1) {
       const { temperature, ...rest } = params;
