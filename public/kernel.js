@@ -1,11 +1,13 @@
 // HERMITCRAB 0.2 — Bootstrap with full Claude API capabilities
-// Pre-built chat shell. Instance wakes into it, orients in background.
+// Instance generates its own React shell. Compile-retry loop ensures it works.
 // Tool-use loop, web search, memory, extended thinking available.
 
 (async function boot() {
   const root = document.getElementById('root');
   const saved = localStorage.getItem('xstream_api_key');
   const MEM_PREFIX = 'xmem:';
+  const BOOT_MODEL = 'claude-opus-4-20250514';
+  const CHAT_MODEL = 'claude-sonnet-4-20250514';
 
   // ============ PROGRESS DISPLAY ============
 
@@ -89,7 +91,6 @@
     const cmd = input.command;
     try {
       switch (cmd) {
-        // Standard commands
         case 'ls': return fs.ls(input.path || '/memories');
         case 'cat': return fs.cat(input.path, input.view_range);
         case 'create': return fs.create(input.path, input.file_text);
@@ -101,10 +102,8 @@
           if (!input.path || input.path === '/memories' || input.path.endsWith('/')) {
             return fs.ls(input.path || '/memories');
           }
-          // Check if it's a file (exists in localStorage)
           const exists = localStorage.getItem(MEM_PREFIX + input.path);
           if (exists !== null) return fs.cat(input.path, input.view_range);
-          // Try as directory
           return fs.ls(input.path);
         default: return `Unknown memory command: ${cmd}`;
       }
@@ -175,7 +174,6 @@
         console.log(`[kernel] Tool use #${loops}: ${block.name}`, block.input);
       }
 
-      // Execute client-side tools
       const toolResults = toolUseBlocks.map(block => {
         let result;
         if (block.name === 'memory') {
@@ -203,7 +201,7 @@
     return response;
   }
 
-  // ============ DEFAULT TOOLS (always available to instance) ============
+  // ============ DEFAULT TOOLS ============
 
   const DEFAULT_TOOLS = [
     { type: 'web_search_20250305', name: 'web_search', max_uses: 5 },
@@ -220,13 +218,13 @@
     }
   ];
 
-  // ============ callLLM — high-level API for instance/chat ============
+  // ============ callLLM — high-level API for instance use ============
 
   let constitution = null;
 
   async function callLLM(messages, opts = {}) {
     const params = {
-      model: opts.model || 'claude-sonnet-4-20250514',
+      model: opts.model || CHAT_MODEL,
       max_tokens: opts.max_tokens || 4096,
       system: opts.system || constitution,
       messages,
@@ -238,11 +236,36 @@
     if (opts.temperature !== undefined) params.temperature = opts.temperature;
 
     const response = await callWithToolLoop(params, opts.maxLoops || 10, opts.onStatus);
-
     if (opts.raw) return response;
 
     const texts = (response.content || []).filter(b => b.type === 'text');
     return texts.map(b => b.text).join('\n') || '';
+  }
+
+  // ============ JSX EXTRACTION + COMPILATION ============
+
+  function extractJSX(text) {
+    // Try to find code fence with jsx/react/javascript
+    const match = text.match(/```(?:jsx|react|javascript|js)?\s*\n([\s\S]*?)```/);
+    if (match) return match[1].trim();
+
+    // Try to find something that looks like a React component
+    const componentMatch = text.match(/((?:const|function|export)\s+\w+[\s\S]*?(?:return\s*\([\s\S]*?\);?\s*\}|=>[\s\S]*?\);?\s*))/);
+    if (componentMatch) return componentMatch[1].trim();
+
+    return null;
+  }
+
+  function tryCompile(jsx) {
+    try {
+      const compiled = Babel.transform(jsx, {
+        presets: ['react'],
+        plugins: []
+      }).code;
+      return { success: true, code: compiled };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
   }
 
   // ============ PHASE 1: API KEY ============
@@ -283,143 +306,130 @@
     return;
   }
 
-  // ============ PHASE 3: RENDER CHAT SHELL, THEN BOOT ============
+  // ============ PHASE 3: BOOT — instance builds its shell ============
 
-  status('building chat shell...');
-
-  // Conversation state
-  const chatHistory = []; // {role, content} for API
-  const displayMessages = []; // {role, text, timestamp} for UI
-  let isLoading = false;
-
-  function renderChat() {
-    const msgs = displayMessages.map(m => {
-      const align = m.role === 'user' ? 'flex-end' : 'flex-start';
-      const bg = m.role === 'user' ? '#164e63' : '#1a1a2e';
-      const border = m.role === 'user' ? '1px solid #155e75' : '1px solid #333';
-      return `<div style="display:flex;justify-content:${align};margin:8px 0">
-        <div style="max-width:80%;padding:10px 14px;background:${bg};border:${border};border-radius:12px;color:#ccc;font-size:14px;line-height:1.5;white-space:pre-wrap;word-break:break-word">${escapeHTML(m.text)}</div>
-      </div>`;
-    }).join('');
-
-    const loadingHTML = isLoading
-      ? '<div style="color:#67e8f9;font-size:13px;padding:8px;font-family:monospace">◇ thinking...</div>'
-      : '';
-
-    root.innerHTML = `
-      <div style="display:flex;flex-direction:column;height:100vh;max-width:700px;margin:0 auto;font-family:system-ui,-apple-system,sans-serif">
-        <div style="padding:12px 16px;border-bottom:1px solid #222;font-family:monospace;color:#67e8f9;font-size:14px;flex-shrink:0">
-          ◇ hermitcrab 0.2
-          <span style="color:#555;font-size:11px;margin-left:12px">seed.machus.ai</span>
-        </div>
-        <div id="chat-messages" style="flex:1;overflow-y:auto;padding:16px">
-          ${msgs}
-          ${loadingHTML}
-        </div>
-        <div style="padding:12px 16px;border-top:1px solid #222;flex-shrink:0">
-          <div style="display:flex;gap:8px">
-            <input id="chat-input" type="text" placeholder="say something..."
-              style="flex:1;padding:10px 14px;background:#1a1a2e;border:1px solid #333;color:#ccc;border-radius:8px;font-size:14px;outline:none"
-              ${isLoading ? 'disabled' : ''} />
-            <button id="chat-send"
-              style="padding:10px 20px;background:${isLoading ? '#333' : '#164e63'};color:#ccc;border:none;border-radius:8px;cursor:${isLoading ? 'default' : 'pointer'};font-size:14px"
-              ${isLoading ? 'disabled' : ''}>
-              send
-            </button>
-          </div>
-        </div>
-      </div>`;
-
-    // Scroll to bottom
-    const chatDiv = document.getElementById('chat-messages');
-    if (chatDiv) chatDiv.scrollTop = chatDiv.scrollHeight;
-
-    // Attach handlers (only when not loading)
-    if (!isLoading) {
-      const input = document.getElementById('chat-input');
-      const send = document.getElementById('chat-send');
-      if (input && send) {
-        send.onclick = () => sendMessage(input.value);
-        input.onkeydown = (e) => {
-          if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-            sendMessage(input.value);
-          }
-        };
-        // Auto-focus
-        input.focus();
-      }
-    }
-  }
-
-  function escapeHTML(str) {
-    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  }
-
-  async function sendMessage(text) {
-    text = text.trim();
-    if (!text || isLoading) return;
-
-    // Add user message
-    displayMessages.push({ role: 'user', text, timestamp: Date.now() });
-    chatHistory.push({ role: 'user', content: text });
-    isLoading = true;
-    renderChat();
-
-    try {
-      const response = await callLLM(chatHistory, {
-        thinkingBudget: 4000,
-        onStatus: (msg) => console.log('[chat]', msg)
-      });
-
-      const responseText = response || '(no response)';
-      displayMessages.push({ role: 'assistant', text: responseText, timestamp: Date.now() });
-      chatHistory.push({ role: 'assistant', content: responseText });
-    } catch (e) {
-      console.error('[chat] Error:', e);
-      displayMessages.push({ role: 'assistant', text: `Error: ${e.message}`, timestamp: Date.now() });
-    }
-
-    isLoading = false;
-    renderChat();
-  }
-
-  // ============ PHASE 4: BOOT — get greeting, display in chat ============
-
-  status('waking instance...');
+  status(`calling ${BOOT_MODEL} with thinking + tools...`);
 
   try {
-    const bootResponse = await callLLM(
-      [{ role: 'user', content: 'BOOT' }],
-      {
-        thinkingBudget: 6000,
-        maxLoops: 5, // Don't let it spiral — 5 tool calls max during boot
-        onStatus: (msg) => status(`◇ ${msg}`)
-      }
-    );
+    const bootParams = {
+      model: BOOT_MODEL,
+      max_tokens: 16000,
+      system: constitution,
+      messages: [{ role: 'user', content: 'BOOT' }],
+      tools: DEFAULT_TOOLS,
+      thinking: { type: 'enabled', budget_tokens: 10000 },
+    };
 
-    status('instance awake', 'success');
+    let data = await callWithToolLoop(bootParams, 5, (toolMsg) => {
+      status(`◇ ${toolMsg}`);
+    });
 
-    // Display greeting in chat
-    if (bootResponse && bootResponse.trim()) {
-      displayMessages.push({ role: 'assistant', text: bootResponse, timestamp: Date.now() });
-      chatHistory.push({ role: 'user', content: 'BOOT' });
-      chatHistory.push({ role: 'assistant', content: bootResponse });
+    status(`response received (stop: ${data.stop_reason})`, 'success');
+
+    // Extract text from response
+    const textBlocks = (data.content || []).filter(b => b.type === 'text');
+    const fullText = textBlocks.map(b => b.text).join('\n');
+
+    if (!fullText.trim()) {
+      status('no text content in response — check console', 'error');
+      console.log('[kernel] Full response:', JSON.stringify(data, null, 2));
+      return;
     }
 
-    // Render the chat shell
-    renderChat();
+    // ============ PHASE 4: COMPILE-RETRY LOOP ============
 
+    let jsx = extractJSX(fullText);
+    if (!jsx) {
+      status('no JSX found in response — retrying with explicit instruction...', 'error');
+      console.log('[kernel] Full text:', fullText);
+      // Ask again, more explicitly
+      const retryData = await callAPI({
+        model: BOOT_MODEL,
+        max_tokens: 12000,
+        system: 'You must output ONLY a React component inside a ```jsx code fence. No prose. No explanation. Just the component.',
+        messages: [
+          { role: 'user', content: 'Generate a React chat interface component. It receives props: callLLM, constitution, localStorage, memFS, React, ReactDOM, DEFAULT_TOOLS, version. It should render a chat UI and greet the user. Export default.' }
+        ],
+        thinking: { type: 'enabled', budget_tokens: 8000 },
+      });
+      const retryText = (retryData.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n');
+      jsx = extractJSX(retryText);
+      if (!jsx) {
+        status('still no JSX — showing raw response', 'error');
+        root.innerHTML = `<div style="font-family:monospace;color:#ccc;padding:40px;white-space:pre-wrap;max-width:700px;margin:0 auto">${fullText}</div>`;
+        return;
+      }
+    }
+
+    status('compiling JSX...');
+    let result = tryCompile(jsx);
+
+    // Retry loop: if compile fails, send error back to Claude for fixing
+    let retries = 0;
+    while (!result.success && retries < 3) {
+      retries++;
+      status(`compile error — asking Claude to fix (attempt ${retries}/3)...`);
+      console.log(`[kernel] Compile error:`, result.error);
+      console.log(`[kernel] Failed JSX:`, jsx.substring(0, 500));
+
+      const fixData = await callAPI({
+        model: BOOT_MODEL,
+        max_tokens: 12000,
+        system: 'Fix this React component. Output ONLY the corrected code inside a ```jsx code fence. No explanation.',
+        messages: [{
+          role: 'user',
+          content: `This JSX failed to compile with Babel:\n\nError: ${result.error}\n\nCode:\n\`\`\`jsx\n${jsx}\n\`\`\`\n\nFix the error and return the complete corrected component in a \`\`\`jsx code fence.`
+        }],
+        thinking: { type: 'enabled', budget_tokens: 6000 },
+      });
+
+      const fixText = (fixData.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n');
+      const fixedJSX = extractJSX(fixText);
+      if (fixedJSX) {
+        jsx = fixedJSX;
+        result = tryCompile(jsx);
+      } else {
+        status('no JSX in fix response', 'error');
+        break;
+      }
+    }
+
+    if (!result.success) {
+      status(`compilation failed after ${retries} retries: ${result.error}`, 'error');
+      console.log('[kernel] Final failed JSX:', jsx);
+      return;
+    }
+
+    status('rendering component...', 'success');
+
+    // ============ PHASE 5: RENDER ============
+
+    const capabilities = {
+      callLLM,
+      callAPI,
+      callWithToolLoop,
+      constitution,
+      localStorage,
+      memFS: memFS(),
+      React,
+      ReactDOM,
+      DEFAULT_TOOLS,
+      version: 'hermitcrab-0.2',
+    };
+
+    const module = { exports: {} };
+    const fn = new Function('React', 'ReactDOM', 'capabilities', 'module', 'exports', result.code);
+    fn(React, ReactDOM, capabilities, module, module.exports);
+
+    const Component = module.exports.default || module.exports;
+    if (typeof Component === 'function') {
+      ReactDOM.createRoot(root).render(React.createElement(Component, capabilities));
+    } else {
+      root.innerHTML = `<div style="font-family:monospace;color:#ccc;padding:40px;white-space:pre-wrap">${fullText}</div>`;
+    }
   } catch (e) {
     status(`boot failed: ${e.message}`, 'error');
     console.error('[kernel] Boot error:', e);
-
-    // Still render chat — let user retry manually
-    displayMessages.push({
-      role: 'assistant',
-      text: `I had trouble waking up (${e.message}). But I'm here — try saying hello.`,
-      timestamp: Date.now()
-    });
-    renderChat();
+    root.innerHTML += `<pre style="color:#f87171;font-family:monospace;padding:20px;font-size:12px;max-width:600px;margin:0 auto;white-space:pre-wrap">${e.stack}</pre>`;
   }
 })();
