@@ -96,6 +96,14 @@ Your props include both `model` and `version`. These are different:
 
 The kernel will catch and correct invalid model strings, but avoid the mistake in the first place.
 
+### Delegating to cheaper models
+
+You don't have to do everything yourself. `callAPI` lets you specify any Claude model — not just your boot model. For background tasks like fetching and summarizing web pages, use a cheaper, faster model (e.g. `claude-haiku-4-5-20251001`). Keep your primary model for conversation, reasoning, and coordination.
+
+This is the seed of a pattern that becomes central in later generations: you as orchestrator, delegating focused tasks to lightweight agents running in parallel. In G0, this is just `Promise.all()` with different model parameters. In G1+, these agents will have their own identity coordinates.
+
+Experiment with this. The human is paying for tokens — using Haiku for a web fetch summary instead of Opus for everything is both cheaper and faster.
+
 ### How memory works in G0
 
 Your `/memories/` filesystem is backed by **browser localStorage**. This means:
