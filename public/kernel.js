@@ -129,14 +129,26 @@
 
   // ============ API CALL WITH TOOL-USE LOOP ============
 
+  // Sanitize params: remove undefined/null values that the API would reject
+  function cleanParams(params) {
+    const clean = {};
+    for (const [k, v] of Object.entries(params)) {
+      if (v !== undefined && v !== null) {
+        clean[k] = v;
+      }
+    }
+    return clean;
+  }
+
   async function callAPI(params) {
     const apiKey = localStorage.getItem('xstream_api_key');
-    console.log('[kernel] callAPI →', params.model, 'messages:', params.messages?.length, 'tools:', params.tools?.length);
+    const sanitized = cleanParams(params);
+    console.log('[kernel] callAPI →', sanitized.model, 'messages:', sanitized.messages?.length, 'tools:', sanitized.tools?.length);
 
     const res = await fetch('/api/claude', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-API-Key': apiKey },
-      body: JSON.stringify(params)
+      body: JSON.stringify(sanitized)
     });
 
     if (!res.ok) {
