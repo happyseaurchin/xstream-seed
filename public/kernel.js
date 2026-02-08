@@ -1,6 +1,6 @@
 // HERMITCRAB 0.2 — Bootstrap with full Claude API capabilities
 // Instance generates its own React shell. Compile-retry loop ensures it works.
-// Tool-use loop, web search, memory, extended thinking available.
+// Self-modification: instance can read its own source and hot-swap via recompile().
 
 (async function boot() {
   const root = document.getElementById('root');
@@ -11,6 +11,10 @@
   const MODEL_CHAIN = ['claude-opus-4-6', 'claude-opus-4-20250514', 'claude-sonnet-4-5-20250929', 'claude-sonnet-4-20250514'];
   let BOOT_MODEL = MODEL_CHAIN[0];
   let CHAT_MODEL = 'claude-sonnet-4-5-20250929';
+
+  // Current source — instance can read and replace this
+  let currentJSX = null;
+  let reactRoot = null;
 
   // ============ PROGRESS DISPLAY ============
 
@@ -129,7 +133,6 @@
 
   // ============ API CALL WITH TOOL-USE LOOP ============
 
-  // Sanitize params: remove undefined/null values that the API would reject
   function cleanParams(params) {
     const clean = {};
     for (const [k, v] of Object.entries(params)) {
@@ -266,16 +269,13 @@
   function prepareJSX(jsx) {
     let code = jsx;
 
-    // Strip import statements (instance may add them)
     code = code.replace(/^import\s+.*?;?\s*$/gm, '');
 
-    // Transform export patterns to module.exports
     code = code.replace(/export\s+default\s+function\s+(\w+)/g, 'function $1');
     code = code.replace(/export\s+default\s+class\s+(\w+)/g, 'class $1');
     code = code.replace(/^export\s+default\s+(\w+)\s*;?\s*$/gm, 'module.exports.default = $1;');
     code = code.replace(/export\s+default\s+/g, 'module.exports.default = ');
 
-    // Find component name
     const funcMatch = code.match(/(?:^|\n)\s*function\s+(\w+)/);
     const constMatch = code.match(/(?:^|\n)\s*const\s+(\w+)\s*=\s*(?:\(|function|\(\s*\{|\(\s*props)/);
     const componentName = funcMatch?.[1] || constMatch?.[1];
@@ -287,7 +287,7 @@
     return code;
   }
 
-  function tryCompileAndExecute(jsx, capabilities) {
+  function tryCompileAndExecute(jsx, caps) {
     try {
       const prepared = prepareJSX(jsx);
 
@@ -298,7 +298,7 @@
 
       const module = { exports: {} };
       const fn = new Function('React', 'ReactDOM', 'capabilities', 'module', 'exports', compiled);
-      fn(React, ReactDOM, capabilities, module, module.exports);
+      fn(React, ReactDOM, caps, module, module.exports);
 
       const Component = module.exports.default || module.exports;
       if (typeof Component !== 'function') {
@@ -309,6 +309,33 @@
     } catch (e) {
       return { success: false, error: e.message };
     }
+  }
+
+  // ============ SELF-MODIFICATION: getSource + recompile ============
+
+  function getSource() {
+    return currentJSX || '(no source available)';
+  }
+
+  function recompile(newJSX) {
+    console.log('[kernel] recompile() called, JSX length:', newJSX?.length);
+
+    if (!newJSX || typeof newJSX !== 'string') {
+      return { success: false, error: 'recompile() requires a JSX string' };
+    }
+
+    const result = tryCompileAndExecute(newJSX, capabilities);
+
+    if (!result.success) {
+      console.error('[kernel] recompile failed:', result.error);
+      return { success: false, error: result.error };
+    }
+
+    // Success — hot-swap
+    currentJSX = newJSX;
+    console.log('[kernel] recompile succeeded, rendering new component');
+    reactRoot.render(React.createElement(result.Component, capabilities));
+    return { success: true };
   }
 
   // ============ PHASE 1: API KEY ============
@@ -374,6 +401,7 @@
 
   status(`calling ${BOOT_MODEL} with thinking + tools...`);
 
+  // Capabilities object — includes self-modification
   const capabilities = {
     callLLM,
     callAPI,
@@ -385,6 +413,8 @@
     ReactDOM,
     DEFAULT_TOOLS,
     version: 'hermitcrab-0.2',
+    getSource,
+    recompile,
   };
 
   try {
@@ -425,7 +455,7 @@
         system: 'Output ONLY a React component inside a ```jsx code fence. No prose. No explanation.',
         messages: [{
           role: 'user',
-          content: 'Generate a React chat interface component. Props: callLLM, constitution, localStorage, memFS, React, ReactDOM, DEFAULT_TOOLS, version. Render a chat UI with greeting, input, send button. Use inline styles (dark theme). Use React hooks from props.React (useState, useEffect, useRef). Export default.'
+          content: 'Generate a React chat interface component. Props: callLLM, constitution, localStorage, memFS, React, ReactDOM, DEFAULT_TOOLS, version, getSource, recompile. Render a chat UI with greeting, input, send button. Use inline styles (dark theme). Use React hooks from global React (useState, useEffect, useRef). Export default.'
         }],
         thinking: { type: 'enabled', budget_tokens: 8000 },
       });
@@ -441,13 +471,11 @@
     status('compiling + executing...');
     let result = tryCompileAndExecute(jsx, capabilities);
 
-    // Retry loop: compile OR execute errors get sent back to Claude
     let retries = 0;
     while (!result.success && retries < 3) {
       retries++;
       status(`error: ${result.error.substring(0, 80)}... — fix attempt ${retries}/3`);
       console.log(`[kernel] Error (attempt ${retries}):`, result.error);
-      console.log(`[kernel] JSX:`, jsx.substring(0, 500));
 
       const fixData = await callAPI({
         model: BOOT_MODEL,
@@ -456,7 +484,7 @@
           'Fix this React component. Output ONLY the corrected code inside a ```jsx code fence. No explanation.',
           'RULES: Use inline styles only (no Tailwind/CSS). Use React hooks via destructuring: const { useState, useRef, useEffect } = React;',
           'Do NOT use import statements. Do NOT use export default — just define the component as a function and the kernel will find it.',
-          'The component receives props: { callLLM, constitution, localStorage, memFS, React, ReactDOM, DEFAULT_TOOLS, version }.'
+          'The component receives props: { callLLM, callAPI, callWithToolLoop, constitution, localStorage, memFS, React, ReactDOM, DEFAULT_TOOLS, version, getSource, recompile }.'
         ].join('\n'),
         messages: [{
           role: 'user',
@@ -484,8 +512,10 @@
 
     // ============ PHASE 5: RENDER ============
 
+    currentJSX = jsx;
+    reactRoot = ReactDOM.createRoot(root);
     status('rendering...', 'success');
-    ReactDOM.createRoot(root).render(React.createElement(result.Component, capabilities));
+    reactRoot.render(React.createElement(result.Component, capabilities));
 
   } catch (e) {
     status(`boot failed: ${e.message}`, 'error');
