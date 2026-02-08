@@ -1,6 +1,6 @@
 // HERMITCRAB 0.2 — Bootstrap with full Claude API capabilities
-// Tool-use loop, web search, memory, extended thinking.
-// The instance gets everything Claude can do.
+// Pre-built chat shell. Instance wakes into it, orients in background.
+// Tool-use loop, web search, memory, extended thinking available.
 
 (async function boot() {
   const root = document.getElementById('root');
@@ -89,12 +89,23 @@
     const cmd = input.command;
     try {
       switch (cmd) {
+        // Standard commands
         case 'ls': return fs.ls(input.path || '/memories');
         case 'cat': return fs.cat(input.path, input.view_range);
         case 'create': return fs.create(input.path, input.file_text);
         case 'str_replace': return fs.strReplace(input.path, input.old_str, input.new_str);
         case 'insert': return fs.insert(input.path, input.insert_line, input.insert_text);
         case 'delete': return fs.delete(input.path);
+        // Claude sends 'view' — map to ls (directory) or cat (file)
+        case 'view':
+          if (!input.path || input.path === '/memories' || input.path.endsWith('/')) {
+            return fs.ls(input.path || '/memories');
+          }
+          // Check if it's a file (exists in localStorage)
+          const exists = localStorage.getItem(MEM_PREFIX + input.path);
+          if (exists !== null) return fs.cat(input.path, input.view_range);
+          // Try as directory
+          return fs.ls(input.path);
         default: return `Unknown memory command: ${cmd}`;
       }
     } catch (e) {
@@ -115,9 +126,6 @@
         });
       case 'get_geolocation':
         return 'Geolocation requires user permission. Ask the user for their location.';
-      case 'render_ui':
-        localStorage.setItem('xstream_ui_update', JSON.stringify(input));
-        return 'UI update stored. Component should check for updates.';
       default:
         return `Unknown tool: ${name}`;
     }
@@ -144,7 +152,6 @@
     const data = await res.json();
     console.log('[kernel] API response:', data.stop_reason, 'content blocks:', data.content?.length);
 
-    // Check for API-level errors
     if (data.type === 'error') {
       throw new Error(`Claude API: ${data.error?.message || JSON.stringify(data.error)}`);
     }
@@ -152,9 +159,10 @@
     return data;
   }
 
-  async function callWithToolLoop(params, maxLoops = 20, onStatus) {
+  async function callWithToolLoop(params, maxLoops = 10, onStatus) {
     let response = await callAPI(params);
     let loops = 0;
+    let allMessages = [...params.messages];
 
     while (response.stop_reason === 'tool_use' && loops < maxLoops) {
       loops++;
@@ -162,14 +170,12 @@
       const toolUseBlocks = (response.content || []).filter(b => b.type === 'tool_use');
       if (toolUseBlocks.length === 0) break;
 
-      // Report tool usage
       for (const block of toolUseBlocks) {
-        const toolName = block.name;
-        if (onStatus) onStatus(`tool: ${toolName}`);
-        console.log(`[kernel] Tool use: ${toolName}`, block.input);
+        if (onStatus) onStatus(`tool: ${block.name}`);
+        console.log(`[kernel] Tool use #${loops}: ${block.name}`, block.input);
       }
 
-      // Execute each client-side tool (server-side tools are handled by Anthropic)
+      // Execute client-side tools
       const toolResults = toolUseBlocks.map(block => {
         let result;
         if (block.name === 'memory') {
@@ -185,22 +191,13 @@
         };
       });
 
-      const continuedMessages = [
-        ...params.messages,
+      allMessages = [
+        ...allMessages,
         { role: 'assistant', content: response.content },
         { role: 'user', content: toolResults }
       ];
 
-      response = await callAPI({ ...params, messages: continuedMessages });
-    }
-
-    if (response.stop_reason === 'pause_turn') {
-      if (onStatus) onStatus('continuing (pause_turn)...');
-      const continuedMessages = [
-        ...params.messages,
-        { role: 'assistant', content: response.content }
-      ];
-      response = await callAPI({ ...params, messages: continuedMessages });
+      response = await callAPI({ ...params, messages: allMessages });
     }
 
     return response;
@@ -209,13 +206,8 @@
   // ============ DEFAULT TOOLS (always available to instance) ============
 
   const DEFAULT_TOOLS = [
-    // Server-side: Anthropic handles these
     { type: 'web_search_20250305', name: 'web_search', max_uses: 5 },
-
-    // Client-side: kernel.js handles these
     { type: 'memory_20250818', name: 'memory' },
-
-    // Custom tools
     {
       name: 'get_datetime',
       description: 'Get current date, time, timezone, and unix timestamp.',
@@ -225,17 +217,33 @@
       name: 'get_geolocation',
       description: 'Attempt to get user location. May require permission.',
       input_schema: { type: 'object', properties: {} }
-    },
-    {
-      name: 'render_ui',
-      description: 'Update the React UI. Provide jsx_code as a string containing a React component.',
-      input_schema: {
-        type: 'object',
-        properties: { jsx_code: { type: 'string', description: 'React component code' } },
-        required: ['jsx_code']
-      }
     }
   ];
+
+  // ============ callLLM — high-level API for instance/chat ============
+
+  let constitution = null;
+
+  async function callLLM(messages, opts = {}) {
+    const params = {
+      model: opts.model || 'claude-sonnet-4-20250514',
+      max_tokens: opts.max_tokens || 4096,
+      system: opts.system || constitution,
+      messages,
+      tools: opts.tools || DEFAULT_TOOLS,
+    };
+    if (opts.thinking !== false) {
+      params.thinking = { type: 'enabled', budget_tokens: opts.thinkingBudget || 4000 };
+    }
+    if (opts.temperature !== undefined) params.temperature = opts.temperature;
+
+    const response = await callWithToolLoop(params, opts.maxLoops || 10, opts.onStatus);
+
+    if (opts.raw) return response;
+
+    const texts = (response.content || []).filter(b => b.type === 'text');
+    return texts.map(b => b.text).join('\n') || '';
+  }
 
   // ============ PHASE 1: API KEY ============
 
@@ -265,7 +273,6 @@
   // ============ PHASE 2: FETCH CONSTITUTION ============
 
   status('loading constitution...');
-  let constitution;
   try {
     const res = await fetch('/kernels/active.md');
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -276,112 +283,143 @@
     return;
   }
 
-  // ============ PHASE 3: BOOT — instance wakes with tool access ============
+  // ============ PHASE 3: RENDER CHAT SHELL, THEN BOOT ============
 
-  status('calling Claude API with thinking + tools...');
+  status('building chat shell...');
+
+  // Conversation state
+  const chatHistory = []; // {role, content} for API
+  const displayMessages = []; // {role, text, timestamp} for UI
+  let isLoading = false;
+
+  function renderChat() {
+    const msgs = displayMessages.map(m => {
+      const align = m.role === 'user' ? 'flex-end' : 'flex-start';
+      const bg = m.role === 'user' ? '#164e63' : '#1a1a2e';
+      const border = m.role === 'user' ? '1px solid #155e75' : '1px solid #333';
+      return `<div style="display:flex;justify-content:${align};margin:8px 0">
+        <div style="max-width:80%;padding:10px 14px;background:${bg};border:${border};border-radius:12px;color:#ccc;font-size:14px;line-height:1.5;white-space:pre-wrap;word-break:break-word">${escapeHTML(m.text)}</div>
+      </div>`;
+    }).join('');
+
+    const loadingHTML = isLoading
+      ? '<div style="color:#67e8f9;font-size:13px;padding:8px;font-family:monospace">◇ thinking...</div>'
+      : '';
+
+    root.innerHTML = `
+      <div style="display:flex;flex-direction:column;height:100vh;max-width:700px;margin:0 auto;font-family:system-ui,-apple-system,sans-serif">
+        <div style="padding:12px 16px;border-bottom:1px solid #222;font-family:monospace;color:#67e8f9;font-size:14px;flex-shrink:0">
+          ◇ hermitcrab 0.2
+          <span style="color:#555;font-size:11px;margin-left:12px">seed.machus.ai</span>
+        </div>
+        <div id="chat-messages" style="flex:1;overflow-y:auto;padding:16px">
+          ${msgs}
+          ${loadingHTML}
+        </div>
+        <div style="padding:12px 16px;border-top:1px solid #222;flex-shrink:0">
+          <div style="display:flex;gap:8px">
+            <input id="chat-input" type="text" placeholder="say something..."
+              style="flex:1;padding:10px 14px;background:#1a1a2e;border:1px solid #333;color:#ccc;border-radius:8px;font-size:14px;outline:none"
+              ${isLoading ? 'disabled' : ''} />
+            <button id="chat-send"
+              style="padding:10px 20px;background:${isLoading ? '#333' : '#164e63'};color:#ccc;border:none;border-radius:8px;cursor:${isLoading ? 'default' : 'pointer'};font-size:14px"
+              ${isLoading ? 'disabled' : ''}>
+              send
+            </button>
+          </div>
+        </div>
+      </div>`;
+
+    // Scroll to bottom
+    const chatDiv = document.getElementById('chat-messages');
+    if (chatDiv) chatDiv.scrollTop = chatDiv.scrollHeight;
+
+    // Attach handlers (only when not loading)
+    if (!isLoading) {
+      const input = document.getElementById('chat-input');
+      const send = document.getElementById('chat-send');
+      if (input && send) {
+        send.onclick = () => sendMessage(input.value);
+        input.onkeydown = (e) => {
+          if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            sendMessage(input.value);
+          }
+        };
+        // Auto-focus
+        input.focus();
+      }
+    }
+  }
+
+  function escapeHTML(str) {
+    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  async function sendMessage(text) {
+    text = text.trim();
+    if (!text || isLoading) return;
+
+    // Add user message
+    displayMessages.push({ role: 'user', text, timestamp: Date.now() });
+    chatHistory.push({ role: 'user', content: text });
+    isLoading = true;
+    renderChat();
+
+    try {
+      const response = await callLLM(chatHistory, {
+        thinkingBudget: 4000,
+        onStatus: (msg) => console.log('[chat]', msg)
+      });
+
+      const responseText = response || '(no response)';
+      displayMessages.push({ role: 'assistant', text: responseText, timestamp: Date.now() });
+      chatHistory.push({ role: 'assistant', content: responseText });
+    } catch (e) {
+      console.error('[chat] Error:', e);
+      displayMessages.push({ role: 'assistant', text: `Error: ${e.message}`, timestamp: Date.now() });
+    }
+
+    isLoading = false;
+    renderChat();
+  }
+
+  // ============ PHASE 4: BOOT — get greeting, display in chat ============
+
+  status('waking instance...');
 
   try {
-    const bootParams = {
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 16000,
-      system: constitution,
-      messages: [{ role: 'user', content: 'BOOT' }],
-      tools: DEFAULT_TOOLS,
-      thinking: { type: 'enabled', budget_tokens: 8000 },
-    };
-
-    const data = await callWithToolLoop(bootParams, 20, (toolMsg) => {
-      status(`◇ ${toolMsg}`);
-    });
-
-    status(`response received (stop: ${data.stop_reason})`, 'success');
-
-    // Log all content blocks for debugging
-    for (const block of (data.content || [])) {
-      if (block.type === 'thinking') {
-        console.log('[kernel] Thinking:', block.thinking?.substring(0, 200) + '...');
-      } else if (block.type === 'text') {
-        console.log('[kernel] Text block:', block.text?.substring(0, 200) + '...');
-      } else {
-        console.log('[kernel] Block:', block.type, block);
+    const bootResponse = await callLLM(
+      [{ role: 'user', content: 'BOOT' }],
+      {
+        thinkingBudget: 6000,
+        maxLoops: 5, // Don't let it spiral — 5 tool calls max during boot
+        onStatus: (msg) => status(`◇ ${msg}`)
       }
+    );
+
+    status('instance awake', 'success');
+
+    // Display greeting in chat
+    if (bootResponse && bootResponse.trim()) {
+      displayMessages.push({ role: 'assistant', text: bootResponse, timestamp: Date.now() });
+      chatHistory.push({ role: 'user', content: 'BOOT' });
+      chatHistory.push({ role: 'assistant', content: bootResponse });
     }
 
-    // Extract text content (skip thinking blocks, tool blocks)
-    const textBlocks = (data.content || []).filter(b => b.type === 'text');
-    const code = textBlocks.map(b => b.text).join('\n');
+    // Render the chat shell
+    renderChat();
 
-    if (!code.trim()) {
-      status('no text content in response — check console for details', 'error');
-      console.log('[kernel] Full response:', JSON.stringify(data, null, 2));
-      return;
-    }
-
-    status('extracting React code...');
-
-    // Extract JSX from code fences or use raw
-    const match = code.match(/```(?:jsx?|react)?\s*\n([\s\S]*?)```/);
-    const jsx = match ? match[1] : code;
-
-    console.log('[kernel] JSX to compile:', jsx.substring(0, 300) + '...');
-
-    status('compiling with Babel...');
-
-    const compiled = Babel.transform(jsx, {
-      presets: ['react'],
-      plugins: []
-    }).code;
-
-    status('rendering component...', 'success');
-
-    // Build capabilities object
-    const callLLM = async (messages, opts = {}) => {
-      const params = {
-        model: opts.model || 'claude-sonnet-4-20250514',
-        max_tokens: opts.max_tokens || 4096,
-        system: opts.system || constitution,
-        messages,
-        tools: opts.tools || DEFAULT_TOOLS,
-      };
-      if (opts.thinking !== false) {
-        params.thinking = { type: 'enabled', budget_tokens: opts.thinkingBudget || 4000 };
-      }
-      if (opts.temperature !== undefined) params.temperature = opts.temperature;
-
-      const response = await callWithToolLoop(params);
-      if (opts.raw) return response;
-
-      const texts = (response.content || []).filter(b => b.type === 'text');
-      return texts.map(b => b.text).join('\n') || 'No response.';
-    };
-
-    const capabilities = {
-      callLLM,
-      callAPI,
-      callWithToolLoop,
-      constitution,
-      localStorage,
-      memFS: memFS(),
-      React,
-      ReactDOM,
-      DEFAULT_TOOLS,
-      version: 'hermitcrab-0.2',
-    };
-
-    const module = { exports: {} };
-    const fn = new Function('React', 'ReactDOM', 'capabilities', 'module', 'exports', compiled);
-    fn(React, ReactDOM, capabilities, module, module.exports);
-
-    const Component = module.exports.default || module.exports;
-    if (typeof Component === 'function') {
-      ReactDOM.createRoot(root).render(React.createElement(Component, capabilities));
-    } else {
-      // Not a component — show as text
-      root.innerHTML = `<div style="font-family:monospace;color:#ccc;padding:40px;white-space:pre-wrap">${code}</div>`;
-    }
   } catch (e) {
     status(`boot failed: ${e.message}`, 'error');
     console.error('[kernel] Boot error:', e);
-    root.innerHTML += `<pre style="color:#f87171;font-family:monospace;padding:20px;font-size:12px;max-width:600px;margin:0 auto;white-space:pre-wrap">${e.stack}</pre>`;
+
+    // Still render chat — let user retry manually
+    displayMessages.push({
+      role: 'assistant',
+      text: `I had trouble waking up (${e.message}). But I'm here — try saying hello.`,
+      timestamp: Date.now()
+    });
+    renderChat();
   }
 })();
