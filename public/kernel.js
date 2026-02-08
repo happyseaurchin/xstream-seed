@@ -31,7 +31,7 @@
       </div>`;
   }
 
-  // ============ MEMORY FILESYSTEM (maps Claude memory tool to localStorage) ============
+  // ============ MEMORY FILESYSTEM ============
 
   function memFS() {
     return {
@@ -48,7 +48,6 @@
         }
         return keys.length ? keys.join('\n') : '(empty)';
       },
-
       cat(path, viewRange) {
         const content = localStorage.getItem(MEM_PREFIX + path);
         if (!content) return `Error: ${path} not found`;
@@ -57,12 +56,10 @@
         const [start, end] = viewRange;
         return lines.slice(start - 1, end).join('\n');
       },
-
       create(path, content) {
         localStorage.setItem(MEM_PREFIX + path, content);
         return `Created ${path}`;
       },
-
       strReplace(path, oldStr, newStr) {
         const content = localStorage.getItem(MEM_PREFIX + path);
         if (!content) return `Error: ${path} not found`;
@@ -70,7 +67,6 @@
         localStorage.setItem(MEM_PREFIX + path, content.replace(oldStr, newStr));
         return `Updated ${path}`;
       },
-
       insert(path, line, text) {
         const content = localStorage.getItem(MEM_PREFIX + path) || '';
         const lines = content.split('\n');
@@ -78,7 +74,6 @@
         localStorage.setItem(MEM_PREFIX + path, lines.join('\n'));
         return `Inserted at line ${line} in ${path}`;
       },
-
       delete(path) {
         localStorage.removeItem(MEM_PREFIX + path);
         return `Deleted ${path}`;
@@ -97,7 +92,6 @@
         case 'str_replace': return fs.strReplace(input.path, input.old_str, input.new_str);
         case 'insert': return fs.insert(input.path, input.insert_line, input.insert_text);
         case 'delete': return fs.delete(input.path);
-        // Claude sends 'view' — map to ls (directory) or cat (file)
         case 'view':
           if (!input.path || input.path === '/memories' || input.path.endsWith('/')) {
             return fs.ls(input.path || '/memories');
@@ -242,27 +236,69 @@
     return texts.map(b => b.text).join('\n') || '';
   }
 
-  // ============ JSX EXTRACTION + COMPILATION ============
+  // ============ JSX EXTRACTION + COMPILATION + EXECUTION ============
 
   function extractJSX(text) {
-    // Try to find code fence with jsx/react/javascript
+    // Try code fence first
     const match = text.match(/```(?:jsx|react|javascript|js)?\s*\n([\s\S]*?)```/);
     if (match) return match[1].trim();
 
-    // Try to find something that looks like a React component
+    // Try bare component pattern
     const componentMatch = text.match(/((?:const|function|export)\s+\w+[\s\S]*?(?:return\s*\([\s\S]*?\);?\s*\}|=>[\s\S]*?\);?\s*))/);
     if (componentMatch) return componentMatch[1].trim();
 
     return null;
   }
 
-  function tryCompile(jsx) {
+  function prepareJSX(jsx) {
+    // Transform export patterns to module.exports (new Function can't handle ESM)
+    let code = jsx;
+
+    // export default function Foo => function Foo ... ; module.exports.default = Foo;
+    code = code.replace(/export\s+default\s+function\s+(\w+)/g, 'function $1');
+    // export default class Foo => class Foo
+    code = code.replace(/export\s+default\s+class\s+(\w+)/g, 'class $1');
+    // export default Foo => module.exports.default = Foo  (standalone line)
+    code = code.replace(/^export\s+default\s+(\w+)\s*;?\s*$/gm, 'module.exports.default = $1;');
+    // Remaining export default <expression> => module.exports.default = <expression>
+    code = code.replace(/export\s+default\s+/g, 'module.exports.default = ');
+
+    // Find the component name — look for function or const declarations
+    const funcMatch = code.match(/(?:^|\n)\s*function\s+(\w+)/);
+    const constMatch = code.match(/(?:^|\n)\s*const\s+(\w+)\s*=\s*(?:\(|function|\(\s*\{|\(\s*props)/);
+
+    const componentName = funcMatch?.[1] || constMatch?.[1];
+
+    // If we stripped export default from a function/class, add module.exports at the end
+    if (componentName && !code.includes('module.exports')) {
+      code += `\nmodule.exports.default = ${componentName};`;
+    }
+
+    return code;
+  }
+
+  function tryCompileAndExecute(jsx, capabilities) {
     try {
-      const compiled = Babel.transform(jsx, {
+      // Prepare: strip ESM exports
+      const prepared = prepareJSX(jsx);
+
+      // Compile JSX to JS
+      const compiled = Babel.transform(prepared, {
         presets: ['react'],
         plugins: []
       }).code;
-      return { success: true, code: compiled };
+
+      // Try executing
+      const module = { exports: {} };
+      const fn = new Function('React', 'ReactDOM', 'capabilities', 'module', 'exports', compiled);
+      fn(React, ReactDOM, capabilities, module, module.exports);
+
+      const Component = module.exports.default || module.exports;
+      if (typeof Component !== 'function') {
+        return { success: false, error: 'No React component exported. Must export default a function component.' };
+      }
+
+      return { success: true, Component };
     } catch (e) {
       return { success: false, error: e.message };
     }
@@ -310,6 +346,20 @@
 
   status(`calling ${BOOT_MODEL} with thinking + tools...`);
 
+  // Build capabilities object (needed for compile+execute)
+  const capabilities = {
+    callLLM,
+    callAPI,
+    callWithToolLoop,
+    constitution,
+    localStorage,
+    memFS: memFS(),
+    React,
+    ReactDOM,
+    DEFAULT_TOOLS,
+    version: 'hermitcrab-0.2',
+  };
+
   try {
     const bootParams = {
       model: BOOT_MODEL,
@@ -326,7 +376,6 @@
 
     status(`response received (stop: ${data.stop_reason})`, 'success');
 
-    // Extract text from response
     const textBlocks = (data.content || []).filter(b => b.type === 'text');
     const fullText = textBlocks.map(b => b.text).join('\n');
 
@@ -336,20 +385,21 @@
       return;
     }
 
-    // ============ PHASE 4: COMPILE-RETRY LOOP ============
+    // ============ PHASE 4: EXTRACT → COMPILE → EXECUTE → RETRY ============
 
     let jsx = extractJSX(fullText);
     if (!jsx) {
-      status('no JSX found in response — retrying with explicit instruction...', 'error');
+      status('no JSX found — requesting explicit component...', 'error');
       console.log('[kernel] Full text:', fullText);
-      // Ask again, more explicitly
+
       const retryData = await callAPI({
         model: BOOT_MODEL,
         max_tokens: 12000,
-        system: 'You must output ONLY a React component inside a ```jsx code fence. No prose. No explanation. Just the component.',
-        messages: [
-          { role: 'user', content: 'Generate a React chat interface component. It receives props: callLLM, constitution, localStorage, memFS, React, ReactDOM, DEFAULT_TOOLS, version. It should render a chat UI and greet the user. Export default.' }
-        ],
+        system: 'Output ONLY a React component inside a ```jsx code fence. No prose. No explanation.',
+        messages: [{
+          role: 'user',
+          content: 'Generate a React chat interface component. Props: callLLM, constitution, localStorage, memFS, React, ReactDOM, DEFAULT_TOOLS, version. Render a chat UI with greeting, input, send button. Use inline styles (dark theme). Use React hooks from props.React (useState, useEffect, useRef). Export default.'
+        }],
         thinking: { type: 'enabled', budget_tokens: 8000 },
       });
       const retryText = (retryData.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n');
@@ -361,24 +411,29 @@
       }
     }
 
-    status('compiling JSX...');
-    let result = tryCompile(jsx);
+    status('compiling + executing...');
+    let result = tryCompileAndExecute(jsx, capabilities);
 
-    // Retry loop: if compile fails, send error back to Claude for fixing
+    // Retry loop: compile OR execute errors get sent back to Claude
     let retries = 0;
     while (!result.success && retries < 3) {
       retries++;
-      status(`compile error — asking Claude to fix (attempt ${retries}/3)...`);
-      console.log(`[kernel] Compile error:`, result.error);
-      console.log(`[kernel] Failed JSX:`, jsx.substring(0, 500));
+      status(`error: ${result.error.substring(0, 80)}... — fix attempt ${retries}/3`);
+      console.log(`[kernel] Error (attempt ${retries}):`, result.error);
+      console.log(`[kernel] JSX:`, jsx.substring(0, 500));
 
       const fixData = await callAPI({
         model: BOOT_MODEL,
         max_tokens: 12000,
-        system: 'Fix this React component. Output ONLY the corrected code inside a ```jsx code fence. No explanation.',
+        system: [
+          'Fix this React component. Output ONLY the corrected code inside a ```jsx code fence. No explanation.',
+          'RULES: Use inline styles only (no Tailwind/CSS). Use React hooks via destructuring: const { useState, useRef, useEffect } = React;',
+          'Do NOT use import statements. Do NOT use export default — just define the component as a function and the kernel will find it.',
+          'The component receives props: { callLLM, constitution, localStorage, memFS, React, ReactDOM, DEFAULT_TOOLS, version }.'
+        ].join('\n'),
         messages: [{
           role: 'user',
-          content: `This JSX failed to compile with Babel:\n\nError: ${result.error}\n\nCode:\n\`\`\`jsx\n${jsx}\n\`\`\`\n\nFix the error and return the complete corrected component in a \`\`\`jsx code fence.`
+          content: `This React component failed:\n\nError: ${result.error}\n\nCode:\n\`\`\`jsx\n${jsx}\n\`\`\`\n\nFix it. Return complete corrected component in a \`\`\`jsx fence.`
         }],
         thinking: { type: 'enabled', budget_tokens: 6000 },
       });
@@ -387,7 +442,7 @@
       const fixedJSX = extractJSX(fixText);
       if (fixedJSX) {
         jsx = fixedJSX;
-        result = tryCompile(jsx);
+        result = tryCompileAndExecute(jsx, capabilities);
       } else {
         status('no JSX in fix response', 'error');
         break;
@@ -395,38 +450,16 @@
     }
 
     if (!result.success) {
-      status(`compilation failed after ${retries} retries: ${result.error}`, 'error');
+      status(`failed after ${retries} retries: ${result.error}`, 'error');
       console.log('[kernel] Final failed JSX:', jsx);
       return;
     }
 
-    status('rendering component...', 'success');
-
     // ============ PHASE 5: RENDER ============
 
-    const capabilities = {
-      callLLM,
-      callAPI,
-      callWithToolLoop,
-      constitution,
-      localStorage,
-      memFS: memFS(),
-      React,
-      ReactDOM,
-      DEFAULT_TOOLS,
-      version: 'hermitcrab-0.2',
-    };
+    status('rendering...', 'success');
+    ReactDOM.createRoot(root).render(React.createElement(result.Component, capabilities));
 
-    const module = { exports: {} };
-    const fn = new Function('React', 'ReactDOM', 'capabilities', 'module', 'exports', result.code);
-    fn(React, ReactDOM, capabilities, module, module.exports);
-
-    const Component = module.exports.default || module.exports;
-    if (typeof Component === 'function') {
-      ReactDOM.createRoot(root).render(React.createElement(Component, capabilities));
-    } else {
-      root.innerHTML = `<div style="font-family:monospace;color:#ccc;padding:40px;white-space:pre-wrap">${fullText}</div>`;
-    }
   } catch (e) {
     status(`boot failed: ${e.message}`, 'error');
     console.error('[kernel] Boot error:', e);
