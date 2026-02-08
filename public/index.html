@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>XSTREAM Seed</title>
+  <title>XSTREAM SEED</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -17,69 +17,117 @@
       justify-content: center;
       padding: 2rem;
     }
-    .container { max-width: 700px; text-align: center; }
+    .container { max-width: 600px; width: 100%; }
     h1 { 
       color: #5eead4; 
-      font-size: 2.5rem; 
-      margin-bottom: 0.75rem;
+      font-size: 2rem; 
+      margin-bottom: 0.5rem;
+      text-align: center;
       text-shadow: 0 0 30px rgba(94, 234, 212, 0.3);
     }
     .tagline { 
       color: #94a3b8; 
-      font-size: 1.1rem; 
+      font-size: 0.95rem; 
       margin-bottom: 2.5rem;
+      text-align: center;
       letter-spacing: 0.05em;
     }
-    .description { 
-      color: #cbd5e1; 
-      font-size: 1.1rem; 
-      line-height: 1.8; 
-      margin-bottom: 2.5rem; 
-    }
-    .cta {
-      display: inline-block;
-      background: #0d9488;
-      color: #f0fdfa;
-      padding: 1rem 2.5rem;
-      border-radius: 6px;
-      text-decoration: none;
-      font-size: 1.1rem;
-      font-weight: bold;
+    .g-card {
+      background: #111118;
+      border: 1px solid #1e293b;
+      border-radius: 8px;
+      padding: 1.25rem 1.5rem;
+      margin-bottom: 1rem;
+      cursor: pointer;
       transition: all 0.2s;
-      margin-bottom: 2rem;
-      box-shadow: 0 0 20px rgba(13, 148, 136, 0.4);
+      display: flex;
+      align-items: flex-start;
+      gap: 1rem;
     }
-    .cta:hover { 
-      background: #14b8a6; 
-      box-shadow: 0 0 30px rgba(20, 184, 166, 0.5);
-      transform: translateY(-2px);
+    .g-card:hover {
+      border-color: #0d9488;
+      box-shadow: 0 0 20px rgba(13, 148, 136, 0.15);
     }
-    .secondary { 
-      display: block; 
-      color: #94a3b8; 
-      font-size: 0.9rem; 
-      text-decoration: none; 
-      margin-top: 1.5rem; 
+    .g-card.current {
+      border-color: #0d9488;
     }
-    .secondary:hover { color: #e2e8f0; }
-    .footer { margin-top: 4rem; color: #64748b; font-size: 0.8rem; }
+    .g-badge {
+      background: #164e63;
+      color: #5eead4;
+      font-size: 0.8rem;
+      font-weight: bold;
+      padding: 4px 10px;
+      border-radius: 4px;
+      white-space: nowrap;
+      min-width: 36px;
+      text-align: center;
+    }
+    .g-badge.stable { background: #064e3b; }
+    .g-badge.dev { background: #1e1b4b; color: #a78bfa; }
+    .g-info { flex: 1; }
+    .g-title { font-size: 1rem; color: #e2e8f0; margin-bottom: 4px; }
+    .g-desc { font-size: 0.85rem; color: #64748b; line-height: 1.5; }
+    .g-status { font-size: 0.75rem; color: #475569; margin-top: 6px; }
+    .current-label {
+      font-size: 0.7rem;
+      color: #0d9488;
+      margin-left: auto;
+      white-space: nowrap;
+    }
+    .footer { 
+      margin-top: 2.5rem; 
+      color: #475569; 
+      font-size: 0.75rem; 
+      text-align: center;
+    }
+    .footer a { color: #64748b; text-decoration: none; }
+    .footer a:hover { color: #94a3b8; }
   </style>
 </head>
 <body>
   <div class="container">
     <h1>◇ XSTREAM SEED</h1>
-    <p class="tagline">Your instance. Your key. Your resources.</p>
-    <p class="description">
-      A self-bootstrapping LLM kernel. Bring your own Claude API key.<br>
-      The infrastructure serves you, not the other way around.
-    </p>
-    <a href="/kernel" class="cta">Launch Kernel →</a>
-    <a href="https://xstream.onen.ai/dev-journey.html" class="secondary">
-      What is this? Read the development journey
-    </a>
+    <p class="tagline">Self-bootstrapping LLM kernel. Your key. Your instance.</p>
+
+    <div class="g-card current" onclick="launch(0)">
+      <span class="g-badge stable">G0</span>
+      <div class="g-info">
+        <div class="g-title">Hermitcrab 0.2 — Initial Condition</div>
+        <div class="g-desc">
+          Instance builds its own React interface. Web search, memory, extended thinking, self-modification via getSource/recompile.
+        </div>
+        <div class="g-status">stable — current default</div>
+      </div>
+      <span class="current-label" id="current-g0"></span>
+    </div>
+
+    <div class="g-card" onclick="launch(1)">
+      <span class="g-badge dev">G1</span>
+      <div class="g-info">
+        <div class="g-title">Pscale Native — Persistence + Coordinates</div>
+        <div class="g-desc">
+          Code at S:0.x coordinates. Logarithmic memory compression. Instance reads and modifies its own infrastructure through pscale addresses.
+        </div>
+        <div class="g-status">in development</div>
+      </div>
+      <span class="current-label" id="current-g1"></span>
+    </div>
+
     <div class="footer">
-      <p>seed.machus.ai — Part of the XSTREAM project</p>
+      <p>seed.machus.ai — Part of the <a href="https://xstream.machus.ai/nexus.html">XSTREAM</a> project</p>
     </div>
   </div>
+
+  <script>
+    // Show which G is currently selected
+    const currentG = localStorage.getItem('xstream_g') || '0';
+    const el = document.getElementById('current-g' + currentG);
+    if (el) el.textContent = '● current';
+
+    function launch(g) {
+      localStorage.setItem('xstream_g', String(g));
+      window.location.href = '/kernel?g=' + g;
+    }
+  </script>
 </body>
 </html>
