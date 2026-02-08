@@ -9,7 +9,6 @@
 
   const MODEL_CHAIN = ['claude-opus-4-6', 'claude-opus-4-20250514', 'claude-sonnet-4-5-20250929', 'claude-sonnet-4-20250514'];
   let BOOT_MODEL = MODEL_CHAIN[0];
-  let CHAT_MODEL = 'claude-sonnet-4-5-20250929';
 
   let currentJSX = null;
   let reactRoot = null;
@@ -37,26 +36,6 @@
   }
 
   // ============ PSCALE COORDINATE STORAGE ============
-  //
-  // Spatial coordinates (S:0.x) — code/content addressing
-  //   S:0.1  = platform (auto-index of 0.11, 0.12, etc.)
-  //   S:0.11 = kernel.js source
-  //   S:0.12 = constitution source
-  //   S:0.13 = API proxy description
-  //   S:0.2  = current interface (running JSX)
-  //   S:0.21 = interface version 1, S:0.22 = v2, etc.
-  //
-  // Memory coordinates (M:N) — logarithmic compression
-  //   M:1, M:2, ... M:9 = individual solid entries
-  //   M:10 = summary of M:1-M:9
-  //   M:11, M:12, ... M:19 = next batch
-  //   M:20 = summary of M:11-M:19
-  //   ...
-  //   M:100 = summary of M:10, M:20, ... M:90
-  //   M:1000 = summary of M:100, M:200, ... M:900
-  //
-  // Each digit is a pscale level:
-  //   5432 = 5th epoch (p3), 4th period (p2), 3rd session (p1), 2nd entry (p0)
 
   function pscaleStore() {
     function key(coord) { return PS_PREFIX + coord; }
@@ -90,41 +69,30 @@
         return results.sort();
       },
 
-      // Memory-specific: find the next coordinate for a new solid entry
       nextMemory() {
         const memCoords = this.list('M:').map(c => parseInt(c.slice(2))).filter(n => !isNaN(n));
-        if (memCoords.length === 0) return 'M:1';
+        if (memCoords.length === 0) return { type: 'entry', coord: 'M:1' };
 
-        // Find highest coordinate
         const max = Math.max(...memCoords);
         const next = max + 1;
-
-        // Check if we've hit a decade boundary (9→10, 19→20, 99→100, etc.)
-        // The decade number is a summary slot, so actual next entry is decade+1
         const nextStr = String(next);
         const allZeros = nextStr.slice(1).split('').every(c => c === '0');
         if (allZeros && nextStr.length > 1) {
-          // This is a summary slot (10, 20, 100, etc.) — return it for summarization
           return { type: 'summary', coord: 'M:' + next, summarize: this._getSummaryRange(next) };
         }
-
         return { type: 'entry', coord: 'M:' + next };
       },
 
-      // Get the coordinates that should be summarized into a given summary slot
       _getSummaryRange(summaryNum) {
         const str = String(summaryNum);
         const magnitude = Math.pow(10, str.length - 1);
         const base = summaryNum - magnitude;
         const coords = [];
-
         if (magnitude === 10) {
-          // Summarizing individual entries: 10 summarizes 1-9
           for (let i = base + 1; i < summaryNum; i++) {
             coords.push('M:' + i);
           }
         } else {
-          // Summarizing lower summaries: 100 summarizes 10,20,...90
           const step = magnitude / 10;
           for (let i = base + step; i < summaryNum; i += step) {
             coords.push('M:' + i);
@@ -133,8 +101,6 @@
         return coords;
       },
 
-      // Navigate memory at a given resolution
-      // e.g., context(5432) returns: M:5000 (epoch), M:5400 (period), M:5430 (session), M:5432 (entry)
       context(coord) {
         const num = parseInt(coord.replace('M:', ''));
         if (isNaN(num)) return [];
@@ -143,14 +109,11 @@
         for (let i = str.length; i >= 1; i--) {
           const magnitude = Math.pow(10, i - 1);
           const rounded = Math.floor(num / magnitude) * magnitude;
-          if (rounded > 0) {
-            layers.push('M:' + rounded);
-          }
+          if (rounded > 0) layers.push('M:' + rounded);
         }
         return [...new Set(layers)];
       },
 
-      // Get all content for a context stack (for LLM context window)
       contextContent(coord) {
         const layers = this.context(coord);
         const result = {};
@@ -165,7 +128,7 @@
 
   // ============ CUSTOM TOOL EXECUTION ============
 
-  function executeCustomTool(name, input) {
+  async function executeCustomTool(name, input) {
     switch (name) {
       case 'get_datetime':
         return JSON.stringify({
@@ -174,8 +137,19 @@
           timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
           local: new Date().toLocaleString()
         });
-      case 'get_geolocation':
-        return 'Geolocation requires user permission. Ask the user for their location.';
+      case 'web_fetch':
+        try {
+          const res = await fetch('/api/fetch', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: input.url })
+          });
+          const data = await res.json();
+          if (data.error) return `Fetch error: ${data.error}`;
+          return `HTTP ${data.status} (${data.contentType}, ${data.length} bytes):\n${data.content}`;
+        } catch (e) {
+          return `web_fetch failed: ${e.message}`;
+        }
       default:
         return `Unknown tool: ${name}`;
     }
@@ -229,14 +203,16 @@
         console.log(`[g1] Tool #${loops}: ${block.name}`, block.input);
       }
 
-      const toolResults = toolUseBlocks.map(block => {
-        const result = executeCustomTool(block.name, block.input);
-        return {
+      const toolResults = [];
+      for (const block of toolUseBlocks) {
+        const result = await executeCustomTool(block.name, block.input);
+        console.log(`[g1] Tool result for ${block.name}:`, typeof result === 'string' ? result.substring(0, 200) : result);
+        toolResults.push({
           type: 'tool_result',
           tool_use_id: block.id,
           content: typeof result === 'string' ? result : JSON.stringify(result)
-        };
-      });
+        });
+      }
 
       allMessages = [
         ...allMessages,
@@ -254,6 +230,17 @@
   const DEFAULT_TOOLS = [
     { type: 'web_search_20250305', name: 'web_search', max_uses: 5 },
     {
+      name: 'web_fetch',
+      description: 'Fetch the contents of a URL directly. Use this to visit specific pages, read documentation, or check if a site exists. Returns HTTP status, content type, and page content.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          url: { type: 'string', description: 'The full URL to fetch (including https://)' }
+        },
+        required: ['url']
+      }
+    },
+    {
       name: 'get_datetime',
       description: 'Get current date, time, timezone, and unix timestamp.',
       input_schema: { type: 'object', properties: {} }
@@ -266,7 +253,7 @@
 
   async function callLLM(messages, opts = {}) {
     const params = {
-      model: opts.model || CHAT_MODEL,
+      model: opts.model || BOOT_MODEL,
       max_tokens: opts.max_tokens || 4096,
       system: opts.system || constitution,
       messages,
@@ -339,8 +326,7 @@
     if (!result.success) return { success: false, error: result.error };
 
     currentJSX = newJSX;
-    pscale.write('S:0.2', newJSX); // persist to coordinate
-    // Track versions
+    pscale.write('S:0.2', newJSX);
     const versions = pscale.list('S:0.2').filter(c => c.match(/^S:0\.2\d$/));
     const nextVersion = 'S:0.2' + (versions.length + 1);
     pscale.write(nextVersion, newJSX);
@@ -383,13 +369,11 @@
 
   status('checking pscale coordinates...');
 
-  // Check if S:0.11 (kernel) exists — if so, we've been seeded before
   const existingKernel = pscale.read('S:0.11');
 
   if (!existingKernel) {
     status('first boot — seeding coordinates from served files...');
 
-    // Fetch kernel source and write to S:0.11
     try {
       const kernelRes = await fetch('/g1/kernel.js');
       const kernelSrc = await kernelRes.text();
@@ -399,7 +383,6 @@
       status(`failed to seed kernel: ${e.message}`, 'error');
     }
 
-    // Fetch constitution and write to S:0.12
     try {
       const constRes = await fetch('/g1/constitution.md');
       const constSrc = await constRes.text();
@@ -411,7 +394,6 @@
       return;
     }
 
-    // Write platform index
     pscale.write('S:0.1', [
       '# Platform Index (S:0.1)',
       '',
@@ -429,21 +411,19 @@
     status('coordinates seeded', 'success');
   } else {
     status('existing coordinates found — loading from pscale');
-    // Load constitution from coordinate
     constitution = pscale.read('S:0.12');
     if (!constitution) {
-      status('S:0.12 (constitution) missing — falling back to fetch', 'error');
+      status('S:0.12 missing — falling back to fetch', 'error');
       const constRes = await fetch('/g1/constitution.md');
       constitution = await constRes.text();
       pscale.write('S:0.12', constitution);
     }
     status(`constitution loaded from S:0.12 (${constitution.length} chars)`, 'success');
 
-    // Check for saved interface
     const savedJSX = pscale.read('S:0.2');
     if (savedJSX) {
       status('found saved interface at S:0.2 — attempting restore...');
-      const result = tryCompileAndExecute(savedJSX, null); // capabilities not ready yet
+      const result = tryCompileAndExecute(savedJSX, null);
       if (result.success) {
         status('S:0.2 compiles OK — will use saved interface', 'success');
       } else {
@@ -465,7 +445,7 @@
       });
       if (probe.content) {
         BOOT_MODEL = model;
-        status(`using ${model}`, 'success');
+        status(`using ${model} for all calls`, 'success');
         break;
       }
     } catch (e) {
@@ -486,7 +466,6 @@
   const savedJSX = pscale.read('S:0.2');
 
   if (savedJSX) {
-    // Restore from saved coordinate
     status('restoring interface from S:0.2...');
     const result = tryCompileAndExecute(savedJSX, capabilities);
     if (result.success) {
@@ -499,7 +478,6 @@
     status('restore failed — booting fresh', 'error');
   }
 
-  // Fresh boot: ask LLM to generate interface
   status(`calling ${BOOT_MODEL} with thinking + tools...`);
 
   try {
@@ -584,11 +562,9 @@
       return;
     }
 
-    // ============ PHASE 5: RENDER + PERSIST ============
-
     currentJSX = jsx;
     pscale.write('S:0.2', jsx);
-    pscale.write('S:0.21', jsx); // v1
+    pscale.write('S:0.21', jsx);
 
     reactRoot = ReactDOM.createRoot(root);
     status('rendering + persisted to S:0.2', 'success');

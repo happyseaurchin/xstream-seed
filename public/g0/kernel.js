@@ -9,7 +9,6 @@
 
   const MODEL_CHAIN = ['claude-opus-4-6', 'claude-opus-4-20250514', 'claude-sonnet-4-5-20250929', 'claude-sonnet-4-20250514'];
   let BOOT_MODEL = MODEL_CHAIN[0];
-  let CHAT_MODEL = 'claude-sonnet-4-5-20250929';
 
   let currentJSX = null;
   let reactRoot = null;
@@ -113,7 +112,7 @@
 
   // ============ CUSTOM TOOL EXECUTION ============
 
-  function executeCustomTool(name, input) {
+  async function executeCustomTool(name, input) {
     switch (name) {
       case 'get_datetime':
         return JSON.stringify({
@@ -124,6 +123,19 @@
         });
       case 'get_geolocation':
         return 'Geolocation requires user permission. Ask the user for their location.';
+      case 'web_fetch':
+        try {
+          const res = await fetch('/api/fetch', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: input.url })
+          });
+          const data = await res.json();
+          if (data.error) return `Fetch error: ${data.error}`;
+          return `HTTP ${data.status} (${data.contentType}, ${data.length} bytes):\n${data.content}`;
+        } catch (e) {
+          return `web_fetch failed: ${e.message}`;
+        }
       default:
         return `Unknown tool: ${name}`;
     }
@@ -184,20 +196,21 @@
         console.log(`[kernel] Tool use #${loops}: ${block.name}`, block.input);
       }
 
-      const toolResults = toolUseBlocks.map(block => {
+      const toolResults = [];
+      for (const block of toolUseBlocks) {
         let result;
         if (block.name === 'memory') {
           result = executeMemoryCommand(block.input);
         } else {
-          result = executeCustomTool(block.name, block.input);
+          result = await executeCustomTool(block.name, block.input);
         }
-        console.log(`[kernel] Tool result for ${block.name}:`, result);
-        return {
+        console.log(`[kernel] Tool result for ${block.name}:`, typeof result === 'string' ? result.substring(0, 200) : result);
+        toolResults.push({
           type: 'tool_result',
           tool_use_id: block.id,
           content: typeof result === 'string' ? result : JSON.stringify(result)
-        };
-      });
+        });
+      }
 
       allMessages = [
         ...allMessages,
@@ -217,6 +230,17 @@
     { type: 'web_search_20250305', name: 'web_search', max_uses: 5 },
     { type: 'memory_20250818', name: 'memory' },
     {
+      name: 'web_fetch',
+      description: 'Fetch the contents of a URL directly. Use this to visit specific pages, read documentation, or check if a site exists. Returns HTTP status, content type, and page content.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          url: { type: 'string', description: 'The full URL to fetch (including https://)' }
+        },
+        required: ['url']
+      }
+    },
+    {
       name: 'get_datetime',
       description: 'Get current date, time, timezone, and unix timestamp.',
       input_schema: { type: 'object', properties: {} }
@@ -234,7 +258,7 @@
 
   async function callLLM(messages, opts = {}) {
     const params = {
-      model: opts.model || CHAT_MODEL,
+      model: opts.model || BOOT_MODEL,
       max_tokens: opts.max_tokens || 4096,
       system: opts.system || constitution,
       messages,
@@ -372,7 +396,7 @@
       });
       if (probe.content) {
         BOOT_MODEL = model;
-        status(`using ${model}`, 'success');
+        status(`using ${model} for all calls`, 'success');
         break;
       }
     } catch (e) {
