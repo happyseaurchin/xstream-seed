@@ -128,6 +128,9 @@ def first_boot_setup():
     p = BASE_DIR / 'pscale-coordinate-generation-skill.md'
     if p.exists():
         pscale_write('0.1', t, '0.1', p.read_text(encoding='utf-8'))
+    p = BASE_DIR / 'passport-skill.md'
+    if p.exists():
+        pscale_write('0.14', t, '0.1', p.read_text(encoding='utf-8'))
     p = BASE_DIR / 'GENESIS.md'
     if p.exists():
         pscale_write('0.3', t, '0.1', p.read_text(encoding='utf-8'))
