@@ -394,6 +394,17 @@
       return;
     }
 
+    try {
+      const passportRes = await fetch('/g1/passport-skill.md');
+      if (passportRes.ok) {
+        const passportSrc = await passportRes.text();
+        pscale.write('S:0.14', passportSrc);
+        status('S:0.14 ← passport-skill.md', 'success');
+      }
+    } catch (e) {
+      status(`passport skill not loaded: ${e.message}`);
+    }
+
     pscale.write('S:0.1', [
       '# Platform Index (S:0.1)',
       '',
@@ -402,6 +413,7 @@
       '| S:0.11 | kernel.js — boot sequence (T:0.1) |',
       '| S:0.12 | constitution.md — system prompt |',
       '| S:0.13 | API proxy — /api/claude passthrough |',
+      '| S:0.14 | Passport protocol — observation format, JSON schema, exchange |',
       '| S:0.2 | Current running interface (JSX) |',
       '| S:0.2N | Interface version history |',
     ].join('\n'));

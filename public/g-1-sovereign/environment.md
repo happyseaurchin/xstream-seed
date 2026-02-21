@@ -181,6 +181,7 @@ On first boot, the kernel pre-loads these into your pscale space:
 | Coordinate | Content | Source file |
 |------------|---------|-------------|
 | `S:0.1` | Skill for generating T/S/I coordinates from conversation | `pscale-coordinate-generation-skill.md` |
+| `S:0.14` | Passport protocol — observation format, JSON schema, exchange | `passport-skill.md` |
 | `S:0.3` | Origin philosophy document | `GENESIS.md` |
 
 These are your starting conditions. Everything else, you create.
